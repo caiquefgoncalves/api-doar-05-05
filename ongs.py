@@ -488,16 +488,27 @@ def seguir_ong(id_ong):
     cur = con.cursor()
 
     try:
+        # Debug: Mostra os headers recebidos
+        print("=" * 50)
+        print("ROTA SEGUIR - Headers recebidos:")
+        print(f"Authorization: {request.headers.get('Authorization')}")
+        print(f"Cookies: {request.cookies}")
+        print("=" * 50)
+
         # Verifica token
         token_data = decodificar_token()
+        print(f"Token data: {token_data}")  # Debug
+
         if token_data == False:
             return jsonify({'error': 'Você precisa estar logado para seguir uma ONG'}), 401
 
         # Verifica se é doador (tipo 1)
+        print(f"Tipo de usuário: {token_data.get('tipo')}")  # Debug
         if token_data['tipo'] != 1:
             return jsonify({'error': 'Apenas doadores podem seguir ONGs'}), 403
 
         id_doador = token_data['id_usuarios']
+        print(f"ID do doador: {id_doador}")  # Debug
 
         # Verifica se a ONG existe e está aprovada e ativa
         cur.execute("""
@@ -505,41 +516,42 @@ def seguir_ong(id_ong):
             WHERE ID_USUARIOS = ? AND TIPO = 2 AND APROVACAO = 1 AND ATIVO = 1
         """, (id_ong,))
         ong = cur.fetchone()
+        print(f"ONG encontrada: {ong}")  # Debug
 
         if not ong:
             return jsonify({'error': 'ONG não encontrada ou não está disponível'}), 404
 
-        # Verifica se já está seguindo
+        # Verifica se já está seguindo (apenas verifica existência do registro)
         cur.execute("""
-            SELECT ID_SEGUINDO, STATUS FROM SEGUINDO 
+            SELECT ID_SEGUINDO FROM SEGUINDO 
             WHERE ID_USUARIOS_DOADOR = ? AND ID_USUARIOS_ONG = ?
         """, (id_doador, id_ong))
         seguindo = cur.fetchone()
+        print(f"Já está seguindo? {seguindo}")  # Debug
 
         if seguindo:
-            if seguindo[1] == 1:
-                return jsonify({'message': 'Você já está seguindo esta ONG', 'seguindo': True}), 200
-            else:
-                # Reativar follow
-                cur.execute("""
-                    UPDATE SEGUINDO SET STATUS = 1 
-                    WHERE ID_USUARIOS_DOADOR = ? AND ID_USUARIOS_ONG = ?
-                """, (id_doador, id_ong))
-                con.commit()
-                return jsonify({'message': f'Você voltou a seguir {ong[1]}', 'seguindo': True}), 200
+            return jsonify({
+                'message': 'Você já está seguindo esta ONG',
+                'seguindo': True
+            }), 200
 
         # Criar novo follow
         cur.execute("""
-            INSERT INTO SEGUINDO (ID_USUARIOS_DOADOR, ID_USUARIOS_ONG, STATUS)
-            VALUES (?, ?, 1)
+            INSERT INTO SEGUINDO (ID_USUARIOS_DOADOR, ID_USUARIOS_ONG)
+            VALUES (?, ?)
         """, (id_doador, id_ong))
         con.commit()
+        print("Novo follow criado com sucesso!")  # Debug
 
-        return jsonify({'message': f'Você agora está seguindo {ong[1]}', 'seguindo': True}), 200
+        return jsonify({
+            'message': f'Você agora está seguindo {ong[1]}',
+            'seguindo': True
+        }), 200
 
     except Exception as e:
         con.rollback()
-        return jsonify({'error': str(e)}), 500
+        print(f"ERRO ao seguir ONG: {str(e)}")  # Debug
+        return jsonify({'error': f'Erro ao seguir ONG: {str(e)}'}), 500
     finally:
         cur.close()
         con.close()
@@ -555,39 +567,56 @@ def desseguir_ong(id_ong):
     cur = con.cursor()
 
     try:
+        # Debug: Mostra os headers recebidos
+        print("=" * 50)
+        print("ROTA DESSEGUIR - Headers recebidos:")
+        print(f"Authorization: {request.headers.get('Authorization')}")
+        print(f"Cookies: {request.cookies}")
+        print("=" * 50)
+
         # Verifica token
         token_data = decodificar_token()
+        print(f"Token data: {token_data}")  # Debug
+
         if token_data == False:
             return jsonify({'error': 'Você precisa estar logado'}), 401
 
         # Verifica se é doador
+        print(f"Tipo de usuário: {token_data.get('tipo')}")  # Debug
         if token_data['tipo'] != 1:
             return jsonify({'error': 'Apenas doadores podem desseguir ONGs'}), 403
 
         id_doador = token_data['id_usuarios']
+        print(f"ID do doador: {id_doador}")  # Debug
 
-        # Verifica se está seguindo
+        # Verifica se está seguindo (apenas verifica existência)
         cur.execute("""
             SELECT ID_SEGUINDO FROM SEGUINDO 
-            WHERE ID_USUARIOS_DOADOR = ? AND ID_USUARIOS_ONG = ? AND STATUS = 1
+            WHERE ID_USUARIOS_DOADOR = ? AND ID_USUARIOS_ONG = ?
         """, (id_doador, id_ong))
         seguindo = cur.fetchone()
+        print(f"Registro encontrado para desseguir? {seguindo}")  # Debug
 
         if not seguindo:
             return jsonify({'error': 'Você não está seguindo esta ONG'}), 404
 
-        # Atualiza status para 0 (não segue mais)
+        # Deletar o registro de seguir (já que não tem campo status)
         cur.execute("""
-            UPDATE SEGUINDO SET STATUS = 0 
+            DELETE FROM SEGUINDO 
             WHERE ID_USUARIOS_DOADOR = ? AND ID_USUARIOS_ONG = ?
         """, (id_doador, id_ong))
         con.commit()
+        print("Registro deletado com sucesso!")  # Debug
 
-        return jsonify({'message': 'Você deixou de seguir esta ONG', 'seguindo': False}), 200
+        return jsonify({
+            'message': 'Você deixou de seguir esta ONG',
+            'seguindo': False
+        }), 200
 
     except Exception as e:
         con.rollback()
-        return jsonify({'error': str(e)}), 500
+        print(f"ERRO ao desseguir ONG: {str(e)}")  # Debug
+        return jsonify({'error': f'Erro ao desseguir ONG: {str(e)}'}), 500
     finally:
         cur.close()
         con.close()
@@ -603,21 +632,42 @@ def verificar_seguindo(id_ong):
     cur = con.cursor()
 
     try:
-        token_data = decodificar_token()
-        if token_data == False:
-            return jsonify({'seguindo': False, 'logado': False}), 200
+        # Debug
+        print("=" * 50)
+        print("ROTA VERIFICAR SEGUINDO:")
+        print(f"ID ONG: {id_ong}")
+        print(f"Authorization: {request.headers.get('Authorization')}")
+        print("=" * 50)
 
-        # Apenas doadores podem verificar
+        token_data = decodificar_token()
+        print(f"Token data: {token_data}")  # Debug
+
+        # Se não estiver logado, retorna não seguindo
+        if token_data == False:
+            return jsonify({
+                'seguindo': False,
+                'logado': False,
+                'is_doador': False
+            }), 200
+
+        # Se não for doador, retorna não seguindo
         if token_data['tipo'] != 1:
-            return jsonify({'seguindo': False, 'logado': True, 'is_doador': False}), 200
+            return jsonify({
+                'seguindo': False,
+                'logado': True,
+                'is_doador': False
+            }), 200
 
         id_doador = token_data['id_usuarios']
+        print(f"Verificando follow: Doador {id_doador} -> ONG {id_ong}")  # Debug
 
+        # Verifica se existe registro na tabela SEGUINDO
         cur.execute("""
-            SELECT STATUS FROM SEGUINDO 
-            WHERE ID_USUARIOS_DOADOR = ? AND ID_USUARIOS_ONG = ? AND STATUS = 1
+            SELECT ID_SEGUINDO FROM SEGUINDO 
+            WHERE ID_USUARIOS_DOADOR = ? AND ID_USUARIOS_ONG = ?
         """, (id_doador, id_ong))
         seguindo = cur.fetchone()
+        print(f"Resultado: {'Seguindo' if seguindo else 'Não seguindo'}")  # Debug
 
         return jsonify({
             'seguindo': bool(seguindo),
@@ -626,7 +676,8 @@ def verificar_seguindo(id_ong):
         }), 200
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"ERRO ao verificar seguindo: {str(e)}")  # Debug
+        return jsonify({'error': f'Erro ao verificar: {str(e)}'}), 500
     finally:
         cur.close()
         con.close()
@@ -642,7 +693,15 @@ def minhas_ongs_seguidas():
     cur = con.cursor()
 
     try:
+        # Debug
+        print("=" * 50)
+        print("ROTA MINHAS ONGS SEGUIDAS:")
+        print(f"Authorization: {request.headers.get('Authorization')}")
+        print("=" * 50)
+
         token_data = decodificar_token()
+        print(f"Token data: {token_data}")  # Debug
+
         if token_data == False:
             return jsonify({'error': 'Você precisa estar logado'}), 401
 
@@ -650,32 +709,40 @@ def minhas_ongs_seguidas():
             return jsonify({'error': 'Apenas doadores podem acessar'}), 403
 
         id_doador = token_data['id_usuarios']
+        print(f"Buscando ONGs seguidas pelo doador: {id_doador}")  # Debug
 
+        # Busca todas as ONGs que o doador segue
         cur.execute("""
             SELECT u.ID_USUARIOS, u.NOME, u.DESCRICAO_BREVE, u.CATEGORIA, u.LOCALIZACAO
             FROM SEGUINDO s
             INNER JOIN USUARIOS u ON s.ID_USUARIOS_ONG = u.ID_USUARIOS
-            WHERE s.ID_USUARIOS_DOADOR = ? AND s.STATUS = 1 AND u.ATIVO = 1
+            WHERE s.ID_USUARIOS_DOADOR = ? AND u.ATIVO = 1
             ORDER BY s.ID_SEGUINDO DESC
         """, (id_doador,))
 
         ongs = cur.fetchall()
+        print(f"ONGs encontradas: {len(ongs) if ongs else 0}")  # Debug
 
         lista_ongs = []
-        for ong in ongs:
-            lista_ongs.append({
-                'id': ong[0],
-                'nome': ong[1],
-                'descricao_breve': str(ong[2]) if ong[2] else '',
-                'categoria': str(ong[3]) if ong[3] else '',
-                'localizacao': str(ong[4]) if ong[4] else '',
-                'foto': f'{ong[0]}.jpeg'
-            })
+        if ongs:
+            for ong in ongs:
+                lista_ongs.append({
+                    'id': ong[0],
+                    'nome': ong[1],
+                    'descricao_breve': str(ong[2]) if ong[2] else '',
+                    'categoria': str(ong[3]) if ong[3] else '',
+                    'localizacao': str(ong[4]) if ong[4] else '',
+                    'foto': f'{ong[0]}.jpeg'
+                })
 
-        return jsonify({'ongs': lista_ongs, 'total': len(lista_ongs)}), 200
+        return jsonify({
+            'ongs': lista_ongs,
+            'total': len(lista_ongs)
+        }), 200
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"ERRO ao listar ONGs seguidas: {str(e)}")  # Debug
+        return jsonify({'error': f'Erro ao listar ONGs seguidas: {str(e)}'}), 500
     finally:
         cur.close()
         con.close()
@@ -688,15 +755,25 @@ def contador_seguidores(id_ong):
     cur = con.cursor()
 
     try:
+        # Debug
+        print(f"Contando seguidores da ONG {id_ong}")  # Debug
+
+        # Conta todos os registros na tabela SEGUINDO para esta ONG
         cur.execute("""
             SELECT COUNT(*) FROM SEGUINDO 
-            WHERE ID_USUARIOS_ONG = ? AND STATUS = 1
+            WHERE ID_USUARIOS_ONG = ?
         """, (id_ong,))
         count = cur.fetchone()[0]
+        print(f"Total de seguidores: {count}")  # Debug
 
-        return jsonify({'seguidores': count}), 200
+        return jsonify({
+            'seguidores': count,
+            'ong_id': id_ong
+        }), 200
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"ERRO ao contar seguidores: {str(e)}")  # Debug
+        return jsonify({'error': f'Erro ao contar seguidores: {str(e)}'}), 500
     finally:
         cur.close()
         con.close()
