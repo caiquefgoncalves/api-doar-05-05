@@ -47,9 +47,13 @@ def criar_usuarios():
     email_confirmacao = 0
 
     # Só ADM pode criar outro ADM
+    # Só ADM pode criar outro ADM
     if tipo == 0:
         token_data = decodificar_token()
-        if token_data == False or token_data['tipo'] != 0:
+        print(f"DEBUG - Token data: {token_data}")  # Debug
+        if token_data == False:
+            return jsonify({'error': 'Token necessário para criar ADM'}), 401
+        if token_data['tipo'] != 0:
             return jsonify({'error': 'Apenas administradores podem criar contas de ADM'}), 403
 
     con = conexao()
@@ -520,10 +524,6 @@ def login():
     cpf_cnpj = request.json.get('cpf_cnpj')
     senha = request.json.get('senha')
 
-    # Verifica se já está logado
-    if decodificar_token() != False:
-        return jsonify({'error': 'Você já está logado. Faça logout primeiro.'}), 400
-
     con = conexao()
     cur = con.cursor()
 
@@ -563,7 +563,12 @@ def login():
                 con.commit()
 
             token = gerar_token(tipo, id_usuarios, 10)
-            resp = make_response(jsonify({'message': f'Bem-vindo {nome}!', 'nome': nome, 'token': token}))
+            resp = make_response(jsonify({
+                'message': f'Bem-vindo {nome}!',
+                'nome': nome,
+                'token': token,
+                'tipo': tipo
+            }))
             resp.set_cookie('acess_token', token, httponly=True, secure=False, samesite='Lax', path="/", max_age=7600)
             return resp
 
@@ -575,7 +580,7 @@ def login():
         return jsonify({"error": "Senha incorreta"}), 400
 
     except Exception as e:
-        return jsonify({'message': f'Erro: {e}'}), 500
+        return jsonify({'error': f'Erro: {str(e)}'}), 500
     finally:
         cur.close()
         con.close()
@@ -823,7 +828,6 @@ def verificar_codigo():
         con.close()
 
 
-# Buscar dados do próprio usuário logado
 @app.route('/meus_dados', methods=['GET'])
 def meus_dados():
     token_data = decodificar_token()
@@ -837,26 +841,34 @@ def meus_dados():
 
     try:
         cur.execute("""SELECT ID_USUARIOS, NOME, EMAIL, CPF_CNPJ, TELEFONE
-                       FROM USUARIOS WHERE ID_USUARIOS = ?""", (id_usuarios,))
+        FROM USUARIOS WHERE ID_USUARIOS = ?""", (id_usuarios,))
         usuario = cur.fetchone()
 
         if not usuario:
             return jsonify({'error': 'Usuário não encontrado'}), 404
 
+        cur.execute("""SELECT ID_VOLUNTARIADO FROM VOLUNTARIADO
+        WHERE ID_USUARIOS = ?""", (id_usuarios,))
+        voluntario = cur.fetchone()
+        if voluntario:
+            voluntario = True
+        else:
+            voluntario = False
+
         return jsonify({
             'usuario': {
-                'id': usuario[0],
-                'nome': usuario[1],
-                'email': usuario[2],
-                'cpf_cnpj': usuario[3],
-                'telefone': usuario[4]
-            }
+            'id': usuario[0],
+            'nome': usuario[1],
+            'email': usuario[2],
+            'cpf_cnpj': usuario[3],
+            'telefone': usuario[4],
+            'voluntario': voluntario
+        }
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     finally:
         cur.close()
-        con.close()
 
 
 # usuario.py - Rota de bloqueio/desbloqueio

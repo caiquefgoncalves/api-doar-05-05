@@ -1,11 +1,9 @@
 # ongs.py
 from flask import jsonify, request, render_template
-from funcao import enviando_email, decodificar_token, validar_adm
+from funcao import enviando_email, decodificar_token, validar_adm, gerar_qr_pix
 from main import app
 from db import conexao
 import threading
-import datetime
-
 
 
 
@@ -53,7 +51,7 @@ def ver_ong_publica(id_ong):
     cur = con.cursor()
     try:
         cur.execute("""SELECT ID_USUARIOS, NOME, DESCRICAO_BREVE, DESCRICAO_LONGA,
-        CPF_CNPJ, CATEGORIA, LOCALIZACAO, COD_BANCO, NUM_AGENCIA
+        CPF_CNPJ, CATEGORIA, LOCALIZACAO, COD_BANCO, NUM_AGENCIA, CHAVE_PIX
         FROM USUARIOS WHERE ID_USUARIOS = ? AND TIPO = 2 AND APROVACAO = 1""", (id_ong,))
         ong = cur.fetchone()
 
@@ -63,58 +61,83 @@ def ver_ong_publica(id_ong):
         cnpj = ong[4]
         cnpj_formatado = f"{cnpj[:2]}.{cnpj[2:5]}.{cnpj[5:8]}/{cnpj[8:12]}-{cnpj[12:]}"
 
+        # Inicializar variáveis com valores padrão
+        qtd_projetos = 0
+        qtd_atualizacoes = 0
+        dic_atualizacoes = []
+        projetos_lista = []
+
+        # Contar seguidores
+        cur.execute("SELECT COUNT(*) FROM SEGUINDO WHERE ID_USUARIOS_ONG = ?", (id_ong,))
+        qtd_seguidores = cur.fetchone()[0]
+
+        # Gerar QR Code PIX
+        nome_qr = None
+        if ong[9]:  # CHAVE_PIX está na posição 9
+            try:
+                resultado = gerar_qr_pix(
+                    chave_pix=ong[9],
+                    nome=ong[1],
+                    cidade=ong[6] if ong[6] else '',
+                    id_ong=ong[0],
+                    pasta_base=app.config['UPLOAD_FOLDER']
+                )
+                nome_qr = resultado[0]
+            except Exception as e:
+                print(f"Erro ao gerar QR Code: {e}")
 
         cur.execute("""SELECT ID_PROJETOS, TITULO, DESCRICAO, TIPO_AJUDA
         FROM PROJETOS WHERE ID_USUARIOS = ? AND STATUS = 'Ativo'""", (id_ong,))
         projetos = cur.fetchall()
-        print(projetos)
 
         if projetos:
             qtd_projetos = len(projetos)
-            print(qtd_projetos)
+            projetos_lista = [{
+                'id': p[0], 'titulo': p[1], 'descricao': p[2], 'tipo_ajuda': p[3]
+            } for p in projetos]
 
-            ids_projetos = []
+            ids_projetos = [p[0] for p in projetos]
 
-            for p in projetos:
-                ids_projetos.append(p[0])
-
-            dic_atualizacoes = []
-            for id in ids_projetos:
+            for proj_id in ids_projetos:
                 cur.execute("""SELECT ID_ATUALIZACOES, ID_PROJETOS, TITULO, TEXTO
-                    FROM ATUALIZACOES WHERE ID_PROJETOS = ?""", (id,))
+                    FROM ATUALIZACOES WHERE ID_PROJETOS = ?""", (proj_id,))
                 atualizacao = cur.fetchall()
 
                 for a in atualizacao:
-                    dic = {
+                    dic_atualizacoes.append({
                         'id': a[0],
                         'projetos': a[1],
                         'titulo': a[2],
                         'texto': a[3]
-                    }
-                    dic_atualizacoes.append(dic)
+                    })
+
             qtd_atualizacoes = len(dic_atualizacoes)
 
-
         return jsonify({
-        'ong': {
-        'id': ong[0], 'nome': ong[1], 'descricao_breve': ong[2],
-        'descricao_longa': ong[3], 'cpf_cnpj': cnpj_formatado, 'categoria': ong[5],
-        'localizacao': ong[6], 'cod_banco': ong[7], 'num_agencia': ong[8],
-        'foto': f'{ong[0]}.jpeg'
+            'ong': {
+                'id': ong[0], 'nome': ong[1], 'descricao_breve': ong[2],
+                'descricao_longa': ong[3], 'cpf_cnpj': cnpj_formatado, 'categoria': ong[5],
+                'localizacao': ong[6], 'cod_banco': ong[7], 'num_agencia': ong[8],
+                'foto': f'{ong[0]}.jpeg',
+                'pix': nome_qr,
+                'qtd_seguidores': qtd_seguidores
             },
-        'qtd_projetos': qtd_projetos,
-        'projetos': [{
-        'id': p[0], 'titulo': p[1], 'descricao': p[2], 'tipo_ajuda': p[3]
-        } for p in projetos] if projetos else [],
-        'qtd_atualizacoes': qtd_atualizacoes,
-        'atualizacoes': dic_atualizacoes
+            'qtd_projetos': qtd_projetos,
+            'projetos': projetos_lista,
+            'qtd_atualizacoes': qtd_atualizacoes,
+            'atualizacoes': dic_atualizacoes
         }), 200
     except Exception as e:
+        print(f"ERRO ver_ong_publica: {e}")
         return jsonify({'error': str(e)}), 500
+
     finally:
         cur.close()
         con.close()
-
+        print(f"DEBUG - CHAVE_PIX: {ong[9]}")
+        print(f"DEBUG - NOME: {ong[1]}")
+        print(f"DEBUG - CIDADE: {ong[6]}")
+        print(f"DEBUG - QR gerado: {nome_qr}")
 
 @app.route('/buscar', methods=['GET'])
 def buscar():
@@ -777,4 +800,3 @@ def contador_seguidores(id_ong):
     finally:
         cur.close()
         con.close()
-

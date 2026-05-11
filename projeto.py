@@ -1,8 +1,8 @@
 # projeto.py CORRIGIDO
-from flask import jsonify, request
+from flask import jsonify, request, render_template
 from main import app
 from db import conexao
-from funcao import decodificar_token
+from funcao import decodificar_token, gerar_qr_pix, enviando_email
 import os
 from datetime import datetime
 
@@ -242,7 +242,7 @@ def ver_projeto_publico(id_projetos):
 
         # Busca a ONG
         cur.execute("""SELECT ID_USUARIOS, NOME, DESCRICAO_BREVE, CPF_CNPJ, 
-                              COD_BANCO, NUM_AGENCIA, LOCALIZACAO
+                              COD_BANCO, NUM_AGENCIA, LOCALIZACAO, CHAVE_PIX
                        FROM USUARIOS WHERE ID_USUARIOS = ?""", (p[1],))
         ong = cur.fetchone()
 
@@ -257,11 +257,44 @@ def ver_projeto_publico(id_projetos):
             else:
                 cnpj_formatado = cnpj
 
+        # Gerar QR Code PIX (apenas se a ONG tiver chave PIX)
+        nome_qr = None
+        if ong and ong[7]:
+            try:
+                resultado = gerar_qr_pix(
+                    chave_pix=ong[7],
+                    nome=ong[1],
+                    cidade=ong[6] if ong[6] else '',
+                    id_ong=ong[0],
+                    pasta_base=app.config['UPLOAD_FOLDER']
+                )
+                nome_qr = resultado[0]
+            except Exception as e:
+                print(f"Erro ao gerar QR Code: {e}")
+
         # Busca atualizações
         cur.execute("""SELECT ID_ATUALIZACOES, TITULO, TEXTO, DATA_CRIACAO
                        FROM ATUALIZACOES WHERE ID_PROJETOS = ? 
                        ORDER BY DATA_CRIACAO DESC""", (id_projetos,))
         atts = cur.fetchall()
+
+        # Inicializar lista de atualizações
+        atualizacoes_lista = []
+        if atts:
+            for a in atts:
+                data_str = ''
+                if a[3]:
+                    try:
+                        data_str = a[3].strftime('%d/%m/%Y %H:%M')
+                    except:
+                        data_str = str(a[3])
+                atualizacoes_lista.append({
+                    'id': a[0],
+                    'titulo': str(a[1]) if a[1] else '',
+                    'texto': str(a[2]) if a[2] else '',
+                    'data': data_str,
+                    'foto': f'{a[0]}.jpeg'
+                })
 
         return jsonify({
             'projeto': {
@@ -271,18 +304,14 @@ def ver_projeto_publico(id_projetos):
             'ong': {
                 'id': ong[0], 'nome': ong[1], 'descricao_breve': ong[2],
                 'cpf_cnpj': cnpj_formatado, 'cod_banco': ong[4], 'num_agencia': ong[5],
-                'localizacao': ong[6]
+                'localizacao': ong[6],
+                'pix': nome_qr
             } if ong else None,
-            'qtd_atualizacoes': len(atts),
-            'atualizacoes': [{
-                'id': a[0],
-                'titulo': str(a[1]) if a[1] else '',
-                'texto': str(a[2]) if a[2] else '',
-                'data': a[3].strftime('%d/%m/%Y %H:%M') if a[3] else '',
-                'foto': f'{a[0]}.jpeg'
-            } for a in atts] if atts else []
+            'qtd_atualizacoes': len(atualizacoes_lista),
+            'atualizacoes': atualizacoes_lista
         }), 200
     except Exception as e:
+        print(f"ERRO ver_projeto_publico: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         cur.close()
@@ -306,9 +335,13 @@ def listar_projetos_publicos():
 
         lista = []
         for p in projetos:
+            if p[6] == "Dinheiro":
+                tipo_ajuda = 0
+            else:
+                tipo_ajuda = 1
             lista.append({
                 'id': p[0], 'id_usuarios': p[1], 'titulo': p[2], 'descricao': p[3],
-                'categoria': p[4], 'status': p[5], 'tipo_ajuda': p[6], 'localizacao': p[7],
+                'categoria': p[4], 'status': p[5], 'tipo_ajuda': tipo_ajuda, 'localizacao': p[7],
                 'ong_nome': p[8], 'foto': f'{p[0]}.jpeg'
             })
 
@@ -320,3 +353,169 @@ def listar_projetos_publicos():
         con.close()
 
 
+@app.route('/doar_projeto/<int:id_projeto>', methods=['POST'])
+def doar_projeto(id_projeto):
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        valor = request.json.get('valor')
+        data = datetime.datetime.now()
+
+        # Verifica token
+        token_data = decodificar_token()
+
+        if token_data == False:
+            return jsonify({'error': 'Você precisa estar logado para doar para uma ONG'}), 401
+
+        # Verifica se é doador (tipo 1)
+        print(f"Tipo de usuário: {token_data.get('tipo')}") # Debug
+        if token_data['tipo'] != 1:
+            return jsonify({'error': 'Apenas doadores podem doar para ONGs'}), 403
+
+        id_doador = token_data['id_usuarios']
+
+        # Verifica se o projeto existe e está ativo
+        cur.execute("""
+            SELECT ID_PROJETOS, ID_USUARIOS, TITULO FROM USUARIOS
+            WHERE ID_PROJETOS = ? AND STATUS = "Ativo"
+            """, (id_projeto,))
+
+        projeto = cur.fetchone()
+
+        if not projeto:
+            return jsonify({'error': 'Projeto não encontrado ou não está disponível'}), 404
+
+        id_ong = projeto[1]
+
+        cur.execute("""SELECT ID_USUARIOS,
+        NOME,
+        LOCALIZACAO,
+        CHAVE_PIX
+        FROM USUARIOS
+        WHERE ID_USUARIOS = ?
+        AND TIPO = 2
+        AND APROVACAO = 1""", (id_ong,))
+        ong = cur.fetchone()
+
+        if not ong:
+            return jsonify({"error": "ONG não encontrada"}), 404
+
+        # Criar nova doação
+        cur.execute("""
+        INSERT INTO DOACOES (ID_PROJETOS, ID_USUARIOS, VALOR, DATA_DOACAO)
+        VALUES (?, ?, ?, ?) RETURNING ID_DOACOES
+        """, (id_projeto, id_doador, valor, data))
+        id_doacao = cur.fetchone()[0]
+
+        con.commit()
+
+        resultado = gerar_qr_pix(
+        chave_pix=ong[3],
+        nome=ong[1],
+        cidade=ong[3], # pode vir qualquer coisa
+        id=id_doacao,
+        pasta_base=app.config['UPLOAD_FOLDER'],
+        projeto=True
+        )
+
+        nome_qr = resultado[0]
+
+        return jsonify({
+            'message': f'O QR code foi gerado com sucesso!',
+            'pix': nome_qr
+            }), 200
+
+    except Exception as e:
+        con.rollback()
+        return jsonify({'error': f'Erro: {str(e)}'}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+@app.route('/voluntario_projeto/<int:id_projeto>', methods=['POST'])
+def voluntario_projeto(id_projeto):
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        data = datetime.datetime.now()
+
+        # Verifica token
+        token_data = decodificar_token()
+
+        if token_data == False:
+            return jsonify({'error': 'Você precisa estar logado para doar para uma ONG'}), 401
+
+        # Verifica se é doador (tipo 1)
+        print(f"Tipo de usuário: {token_data.get('tipo')}") # Debug
+        if token_data['tipo'] != 1:
+            return jsonify({'error': 'Apenas doadores podem doar para ONGs'}), 403
+
+        id_doador = token_data['id_usuarios']
+
+        cur.execute("""SELECT NOME, E-MAIL FROM USUARIOS WHERE ID_USUARIOS = ?""",
+        (id_doador, ))
+        doador = cur.fetchone()
+        nome_doador = doador[0]
+        email_doador = doador[1]
+
+        # Verifica se o projeto existe e está ativo
+        cur.execute("""
+        SELECT ID_PROJETOS, ID_USUARIOS, TITULO FROM PROJETOS
+        WHERE ID_PROJETOS = ? AND STATUS = "Ativo"
+        """, (id_projeto,))
+
+        projeto = cur.fetchone()
+
+        if not projeto:
+            return jsonify({'error': 'Projeto não encontrado ou não está disponível'}), 404
+
+        id_ong = projeto[1]
+        nome_projeto = projeto[2]
+
+        cur.execute("""SELECT ID_USUARIOS,
+        NOME,
+        EMAIL
+        FROM USUARIOS
+        WHERE ID_USUARIOS = ?
+        AND TIPO = 2
+        AND APROVACAO = 1""", (id_ong,))
+        ong = cur.fetchone()
+
+        if not ong:
+            return jsonify({"error": "ONG não encontrada"}), 404
+
+        nome_ong = ong[1]
+        email_ong = ong[2]
+
+        # Criar novo voluntariado
+        cur.execute("""
+        INSERT INTO VOLUNTARIADO (ID_USUARIOS, ID_PROJETOS)
+        VALUES (?, ?)
+        """, (id_doador, id_projeto))
+        con.commit()
+
+        assunto = "Nova solicitação de voluntariado - Doar +"
+
+        html = render_template('template_voluntariado.html',
+        nome_ong=nome_ong,
+        email_ong=email_ong,
+        nome_usuario=nome_doador,
+        email_usuario=email_doador,
+        nome_projeto=nome_projeto)
+        threading.Thread(target=enviando_email, args=(email_ong, assunto, html)).start()
+
+        return jsonify({
+            'message': f'O e-mail foi enviado com sucesso!',
+        }), 200
+
+    except Exception as e:
+        con.rollback()
+        return jsonify({'error': f'Erro: {str(e)}'}), 500
+    finally:
+        cur.close()
+        con.close()

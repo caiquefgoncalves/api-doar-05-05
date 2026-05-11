@@ -1,5 +1,8 @@
 from flask_bcrypt import generate_password_hash, check_password_hash
-from flask import request, current_app, render_template
+import qrcode
+import os
+import unicodedata
+from flask import jsonify
 
 # Importar o con da main
 from db import conexao
@@ -249,3 +252,76 @@ def validar_adm():
     if token_data['tipo'] != 0:
         return jsonify({'error': 'Apenas administradores podem acessar esta rota'}), 403
     return None
+
+def gerar_qr_pix(chave_pix, nome, cidade, id_ong, pasta_base, valor=None):
+
+    def limpar(texto, max_len):
+        if not texto:
+            return ""
+        texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
+        return texto.strip().upper()[:max_len]
+
+    # 🔹 AJUSTE: garantir cidade válida mesmo vindo zoada
+    cidade = limpar((cidade or "BRASIL").split(",")[0], 15)
+    nome = limpar(nome, 25)
+
+    if not cidade:
+        cidade = "BRASIL"
+
+    # 🔹 FUNÇÃO PRA MONTAR CAMPOS (necessário pro Pix)
+    def campo(id, valor):
+        return f"{id}{len(valor):02}{valor}"
+
+    # 🔹 CORREÇÃO PRINCIPAL: montar campo 26 corretamente
+    gui = campo("00", "BR.GOV.BCB.PIX")
+    chave = campo("01", chave_pix)
+    merchant = campo("26", gui + chave)
+
+    # 🔹 Montando payload
+    payload = (
+        campo("00", "01") +
+        merchant +
+        campo("52", "0000") +
+        campo("53", "986")
+    )
+
+    if valor:
+        valor_str = f"{valor:.2f}"
+        payload += campo("54", valor_str)
+
+    payload += (
+        campo("58", "BR") +
+        campo("59", nome) +
+        campo("60", cidade) +
+        campo("62", campo("05", "***")) +
+        "6304"
+    )
+
+    def crc16(payload):
+        polinomio = 0x1021
+        resultado = 0xFFFF
+
+        for byte in payload.encode():
+            resultado ^= byte << 8
+            for a in range(8):
+                if resultado & 0x8000:
+                    resultado = (resultado << 1) ^ polinomio
+                else:
+                    resultado <<= 1
+                resultado &= 0xFFFF
+
+        return format(resultado, '04X')
+
+    payload_final = payload + crc16(payload)
+
+    nome_arquivo = f'pix_{id_ong}.jpeg'
+
+    pasta = os.path.join(pasta_base, 'Pix')
+    os.makedirs(pasta, exist_ok=True)
+
+    caminho = os.path.join(pasta, nome_arquivo)
+
+    qr = qrcode.make(payload_final)
+    qr.save(caminho)
+
+    return nome_arquivo, payload_final
