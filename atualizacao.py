@@ -12,31 +12,49 @@ from datetime import datetime
 # ============================================
 @app.route('/feed_atualizacoes', methods=['GET'])
 def feed_atualizacoes():
-    """Feed público de atualizações com filtro de ordem"""
     filtro = request.args.get('filtro', 'recentes')
+
+    pagina = int(request.args.get('pagina', 0))
+    limite = int(request.args.get('limite', 4))
+    offset = pagina * limite
 
     con = conexao()
     cur = con.cursor()
 
     try:
-        if filtro == 'antigos':
-            ordem = 'ASC'
-        else:
-            ordem = 'DESC'
+        ordem = 'ASC' if filtro == 'antigos' else 'DESC'
 
-        # MUDAR DE LEFT JOIN PARA INNER JOIN e adicionar WHERE
+        inicio = offset + 1
+        fim = offset + limite
+
         cur.execute(f"""
-            SELECT a.ID_ATUALIZACOES, a.ID_PROJETOS, a.TITULO, a.TEXTO, a.DATA_CRIACAO,
-                   p.ID_USUARIOS, p.TITULO, u.NOME
-            FROM ATUALIZACOES a
-            INNER JOIN PROJETOS p ON a.ID_PROJETOS = p.ID_PROJETOS
-            INNER JOIN USUARIOS u ON p.ID_USUARIOS = u.ID_USUARIOS
-            WHERE u.APROVACAO = 1 AND u.ATIVO = 1
-            ORDER BY a.DATA_CRIACAO {ordem}
+        SELECT a.ID_ATUALIZACOES, a.ID_PROJETOS, a.TITULO,
+        a.TEXTO, a.DATA_CRIACAO, p.ID_USUARIOS, p.TITULO AS TITULO_PROJETO,
+        u.NOME, COALESCE(c.QTD_CURTIDAS, 0) AS QTD_CURTIDAS,
+        COALESCE(co.QTD_COMENTARIOS, 0) AS QTD_COMENTARIOS
+        FROM ATUALIZACOES a
+        INNER JOIN PROJETOS p ON p.ID_PROJETOS = a.ID_PROJETOS
+        INNER JOIN USUARIOS u ON u.ID_USUARIOS = p.ID_USUARIOS
+        LEFT JOIN (
+        SELECT
+        ID_ATUALIZACOES,
+        COUNT(*) AS QTD_CURTIDAS
+        FROM CURTIDAS c
+        GROUP BY ID_ATUALIZACOES
+        ) c ON c.ID_ATUALIZACOES = a.ID_ATUALIZACOES
+        LEFT JOIN (
+        SELECT
+        ID_ATUALIZACOES,
+        COUNT(*) AS QTD_COMENTARIOS
+        FROM COMENTARIOS co
+        GROUP BY ID_ATUALIZACOES
+        ) co ON co.ID_ATUALIZACOES = a.ID_ATUALIZACOES
+        WHERE u.APROVACAO = 1 AND u.ATIVO = 1
+        ORDER BY a.DATA_CRIACAO {ordem}
+        ROWS {inicio} TO {fim}
         """)
 
         dados = cur.fetchall()
-        print(f"DEBUG - Feed total: {len(dados) if dados else 0} | Ordem: {ordem}")
 
         lista = []
         if dados:
@@ -47,7 +65,6 @@ def feed_atualizacoes():
                         data_str = a[4].strftime('%d/%m/%Y %H:%M')
                     except:
                         data_str = str(a[4])
-
                 lista.append({
                     'id': a[0],
                     'projeto_id': a[1],
@@ -57,11 +74,14 @@ def feed_atualizacoes():
                     'ong_id': a[5] if a[5] else 0,
                     'projeto_titulo': str(a[6]) if a[6] else '',
                     'ong_nome': str(a[7]) if a[7] else 'ONG',
-                    'ong_foto': f'{a[5]}.jpeg' if a[5] else 'ong-icon.png',
-                    'foto': f'{a[0]}.jpeg'
-                })
+                    'ong_foto': f'{a[5]}.jpeg',
+                    'foto': f'{a[0]}.jpeg',
+                    'qtd_curtidas': a[8],
+                    'qtd_comentarios': a[9]
+                    })
 
         return jsonify({'atualizacoes': lista}), 200
+
     except Exception as e:
         print(f"ERRO feed_atualizacoes: {e}")
         return jsonify({'error': str(e)}), 500
@@ -338,79 +358,289 @@ def feed_favoritas():
     filtro = request.args.get('filtro', 'recentes')
     pagina = int(request.args.get('pagina', 0))
     limite = int(request.args.get('limite', 4))
-    offset = pagina * limite
 
     con = conexao()
     cur = con.cursor()
 
     try:
-        # Buscar atualizações apenas das ONGs que o doador segue
-        if filtro == 'antigos':
-            ordem = 'a.DATA_CRIACAO ASC'
-        else:
-            ordem = 'a.DATA_CRIACAO DESC'
+        print(f"DEBUG - Feed favoritas - Doador ID: {id_doador}")
 
-        # Usando FIRST e SKIP para Firebird (paginação)
+        # Verificar se o doador segue alguma ONG
+        cur.execute("""
+            SELECT ID_USUARIOS_ONG FROM SEGUINDO 
+            WHERE ID_USUARIOS_DOADOR = ?
+        """, (id_doador,))
+        ongs_seguidas = [row[0] for row in cur.fetchall()]
+        print(f"DEBUG - ONGs seguidas: {ongs_seguidas}")
+
+        if not ongs_seguidas:
+            return jsonify({'atualizacoes': [], 'total': 0}), 200
+
+        # Definir ordem
+        if filtro == 'antigos':
+            ordem = 'ASC'
+        else:
+            ordem = 'DESC'
+
+        # Criar placeholders para os IDs das ONGs
+        placeholders = ','.join(['?'] * len(ongs_seguidas))
+
+        # Buscar atualizações dessas ONGs (sem FIRST/SKIP para evitar erro)
         cur.execute(f"""
-            SELECT FIRST {limite} SKIP {offset}
+            SELECT 
                 a.ID_ATUALIZACOES,
                 a.ID_PROJETOS,
                 a.TITULO,
                 a.TEXTO,
                 a.DATA_CRIACAO,
-                a.FOTO,
                 u.ID_USUARIOS,
-                u.NOME,
-                COALESCE(c.qtd_curtidas, 0) as QTD_CURTIDAS,
-                COALESCE(co.qtd_comentarios, 0) as QTD_COMENTARIOS
+                u.NOME
             FROM ATUALIZACOES a
             INNER JOIN PROJETOS p ON a.ID_PROJETOS = p.ID_PROJETOS
             INNER JOIN USUARIOS u ON p.ID_USUARIOS = u.ID_USUARIOS
-            INNER JOIN SEGUINDO s ON u.ID_USUARIOS = s.ID_USUARIOS_ONG
-            LEFT JOIN (
-                SELECT ID_ATUALIZACOES, COUNT(*) as qtd_curtidas
-                FROM CURTIDAS
-                GROUP BY ID_ATUALIZACOES
-            ) c ON a.ID_ATUALIZACOES = c.ID_ATUALIZACOES
-            LEFT JOIN (
-                SELECT ID_ATUALIZACOES, COUNT(*) as qtd_comentarios
-                FROM COMENTARIOS
-                GROUP BY ID_ATUALIZACOES
-            ) co ON a.ID_ATUALIZACOES = co.ID_ATUALIZACOES
-            WHERE s.ID_USUARIOS_DOADOR = ? 
+            WHERE p.ID_USUARIOS IN ({placeholders})
                 AND u.ATIVO = 1 
                 AND u.APROVACAO = 1
-            ORDER BY {ordem}
-        """, (id_doador,))
+            ORDER BY a.DATA_CRIACAO {ordem}
+        """, ongs_seguidas)
 
-        atualizacoes = cur.fetchall()
+        todas_atualizacoes = cur.fetchall()
+        print(f"DEBUG - Total de atualizações encontradas: {len(todas_atualizacoes) if todas_atualizacoes else 0}")
+
+        # Aplicar paginação manualmente
+        inicio = pagina * limite
+        fim = inicio + limite
+        atualizacoes_paginadas = todas_atualizacoes[inicio:fim] if todas_atualizacoes else []
 
         lista = []
-        if atualizacoes:
-            for att in atualizacoes:
-                data_str = att[4].strftime('%d/%m/%Y %H:%M') if att[4] else ''
-                lista.append({
-                    'id': att[0],
-                    'projeto_id': att[1],
-                    'titulo': att[2],
-                    'texto': att[3],
-                    'data': data_str,
-                    'foto': f'{att[0]}.jpeg' if att[5] else None,
-                    'ong_id': att[6],
-                    'ong_nome': att[7],
-                    'ong_foto': f'{att[6]}.jpeg',
-                    'qtd_curtidas': att[8] or 0,
-                    'qtd_comentarios': att[9] or 0
-                })
+        for att in atualizacoes_paginadas:
+            data_str = ''
+            if att[4]:
+                try:
+                    data_str = att[4].strftime('%d/%m/%Y %H:%M')
+                except:
+                    data_str = str(att[4])
+
+            id_att = att[0]
+            id_ong = att[5]
+
+            # Buscar contagens de curtidas
+            cur.execute("SELECT COUNT(*) FROM CURTIDAS WHERE ID_ATUALIZACOES = ?", (id_att,))
+            qtd_curtidas = cur.fetchone()[0] or 0
+
+            # Buscar contagens de comentários
+            cur.execute("SELECT COUNT(*) FROM COMENTARIOS WHERE ID_ATUALIZACOES = ?", (id_att,))
+            qtd_comentarios = cur.fetchone()[0] or 0
+
+            lista.append({
+                'id': id_att,
+                'projeto_id': att[1],
+                'titulo': str(att[2]) if att[2] else '',
+                'texto': str(att[3]) if att[3] else '',
+                'data': data_str,
+                'foto': f'{id_att}.jpeg',
+                'ong_id': id_ong,
+                'ong_nome': str(att[6]) if att[6] else 'ONG',
+                'ong_foto': f'{id_ong}.jpeg' if id_ong else 'ong-icon.png',
+                'qtd_curtidas': qtd_curtidas,
+                'qtd_comentarios': qtd_comentarios
+            })
+
+        print(f"DEBUG - Retornando {len(lista)} atualizações")
 
         return jsonify({
             'atualizacoes': lista,
-            'total': len(lista)
+            'total': len(todas_atualizacoes) if todas_atualizacoes else 0
         }), 200
 
     except Exception as e:
         print(f"ERRO feed_favoritas: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+@app.route('/curtir/<int:id_atualizacoes>', methods=['POST', 'OPTIONS'])
+def curtir(id_atualizacoes):
+    """Doador segue uma ONG"""
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        # Verifica token
+        token_data = decodificar_token()
+
+        if token_data == False:
+            return jsonify({'error': 'Você precisa estar logado para seguir uma ONG'}), 401
+
+        if token_data['tipo'] != 1:
+            return jsonify({'error': 'Apenas doadores podem curtir atualizações'}), 403
+
+        id_doador = token_data['id_usuarios']
+
+        cur.execute("""
+            SELECT ID_ATUALIZACOES FROM ATUALIZACOES 
+            WHERE ID_ATUALIZACOES = ?
+        """, (id_atualizacoes,))
+        atualizacao = cur.fetchone()
+
+        if not atualizacao:
+            return jsonify({'error': 'Atualização não encontrada ou não está disponível'}), 404
+
+        # Verifica se já está curtido (apenas verifica existência do registro)
+        cur.execute("""
+            SELECT ID_CURTIDAS FROM CURTIDAS 
+            WHERE ID_USUARIOS_DOADOR = ? AND ID_ATUALIZACOES = ?
+        """, (id_doador, id_atualizacoes))
+        curtida = cur.fetchone()
+
+        if curtida:
+            return jsonify({
+                'message': 'Você já está seguindo esta ONG',
+                'seguindo': True
+            }), 200
+
+        # Criar nova curtida
+        cur.execute("""
+            INSERT INTO CURTIDAS (ID_USUARIOS_DOADOR, ID_ATUALIZACOES)
+            VALUES (?, ?)
+        """, (id_doador, id_atualizacoes))
+        con.commit()
+
+        return jsonify({
+            'message': f'Você curtiu essa atualização!',
+            'curtido': True
+        }), 200
+
+    except Exception as e:
+        con.rollback()
+        print(f"ERRO ao curtir ONG: {str(e)}")  # Debug
+        return jsonify({'error': f'Erro ao seguir ONG: {str(e)}'}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+@app.route('/descurtir/<int:id_atualizacoes>', methods=['POST', 'OPTIONS'])
+def descurtir(id_atualizacoes):
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+
+        # Verifica token
+        token_data = decodificar_token()
+
+        print('entrei')
+
+        if token_data == False:
+            return jsonify({'error': 'Você precisa estar logado'}), 401
+
+        # Verifica se é doador
+        print(f"Tipo de usuário: {token_data.get('tipo')}")  # Debug
+        if token_data['tipo'] != 1:
+            return jsonify({'error': 'Apenas doadores podem fazer isso'}), 403
+
+        print('sou doador')
+        id_doador = token_data['id_usuarios']
+
+        # Verifica se está curtido (apenas verifica existência)
+        cur.execute("""
+            SELECT ID_CURTIDAS FROM CURTIDAS
+            WHERE ID_USUARIOS_DOADOR = ? AND ID_ATUALIZACOES = ?
+        """, (id_doador, id_atualizacoes))
+        curtida = cur.fetchone()
+
+        if not curtida:
+            return jsonify({'error': 'Você não curtiu essa atualização'}), 404
+
+        print('tem mesmo')
+        # Deletar o registro de curtida (já que não tem campo status)
+        cur.execute("""
+            DELETE FROM CURTIDAS
+            WHERE ID_USUARIOS_DOADOR = ? AND ID_ATUALIZACOES = ?
+        """, (id_doador, id_atualizacoes))
+        con.commit()
+
+
+        return jsonify({
+            'message': 'Você descurtiu essa atualização',
+            'curtido': False
+        }), 200
+
+    except Exception as e:
+        con.rollback()
+        print(f"ERRO ao descurtir ONG: {str(e)}")  # Debug
+        return jsonify({'error': f'Erro ao desseguir ONG: {str(e)}'}), 500
+    finally:
+        cur.close()
+        con.close()
+
+@app.route('/verificar_curtida/<int:id_atualizacoes>', methods=['GET', 'OPTIONS'])
+def verificar_curtida(id_atualizacoes):
+    """Verifica se o doador está seguindo a ONG"""
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+
+        token_data = decodificar_token()
+
+        # Se não estiver logado, retorna não curtido
+        if token_data == False:
+            return jsonify({
+                'curtido': False,
+                'logado': False,
+                'is_doador': False
+            }), 200
+
+
+        # Se não for doador, retorna não curtido
+        if token_data['tipo'] != 1:
+            return jsonify({
+                'curtido': False,
+                'logado': True,
+                'is_doador': False
+            }), 200
+
+
+        id_doador = token_data['id_usuarios']
+
+        # Verifica se existe registro na tabela CURTIDAS
+        cur.execute("""
+            SELECT ID_CURTIDAS FROM CURTIDAS 
+            WHERE ID_USUARIOS_DOADOR = ? AND ID_ATUALIZACOES = ?
+        """, (id_doador, id_atualizacoes))
+        curtida = cur.fetchone()
+
+        if curtida:
+            return jsonify({
+                'curtido': True,
+                'logado': True,
+                'is_doador': True
+            }), 200
+        else:
+            return jsonify({
+                'curtido': False,
+                'logado': True,
+                'is_doador': True
+            }), 200
+
+
+    except Exception as e:
+        print(f"ERRO ao verificar seguindo: {str(e)}")  # Debug
+        return jsonify({'error': f'Erro ao verificar: {str(e)}'}), 500
     finally:
         cur.close()
         con.close()
