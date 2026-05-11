@@ -66,6 +66,7 @@ from usuario import *
 from projeto import *
 from ongs import *
 from atualizacao import *
+from comentarios import *
 
 
 if __name__ == '__main__':

@@ -777,3 +777,4 @@ def contador_seguidores(id_ong):
     finally:
         cur.close()
         con.close()
+

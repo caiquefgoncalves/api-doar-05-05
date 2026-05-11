@@ -317,3 +317,100 @@ def deletar_atualizacao(id_atualizacoes):
     finally:
         cur.close()
         con.close()
+
+
+@app.route('/feed_favoritas', methods=['GET'])
+def feed_favoritas():
+    """Feed de postagens das ONGs que o doador segue"""
+
+    # Verificar autenticação
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Login necessário'}), 401
+
+    # Apenas doadores
+    if token_data['tipo'] != 1:
+        return jsonify({'error': 'Apenas doadores podem acessar'}), 403
+
+    id_doador = token_data['id_usuarios']
+
+    # Parâmetros de paginação e filtro
+    filtro = request.args.get('filtro', 'recentes')
+    pagina = int(request.args.get('pagina', 0))
+    limite = int(request.args.get('limite', 4))
+    offset = pagina * limite
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        # Buscar atualizações apenas das ONGs que o doador segue
+        if filtro == 'antigos':
+            ordem = 'a.DATA_CRIACAO ASC'
+        else:
+            ordem = 'a.DATA_CRIACAO DESC'
+
+        # Usando FIRST e SKIP para Firebird (paginação)
+        cur.execute(f"""
+            SELECT FIRST {limite} SKIP {offset}
+                a.ID_ATUALIZACOES,
+                a.ID_PROJETOS,
+                a.TITULO,
+                a.TEXTO,
+                a.DATA_CRIACAO,
+                a.FOTO,
+                u.ID_USUARIOS,
+                u.NOME,
+                COALESCE(c.qtd_curtidas, 0) as QTD_CURTIDAS,
+                COALESCE(co.qtd_comentarios, 0) as QTD_COMENTARIOS
+            FROM ATUALIZACOES a
+            INNER JOIN PROJETOS p ON a.ID_PROJETOS = p.ID_PROJETOS
+            INNER JOIN USUARIOS u ON p.ID_USUARIOS = u.ID_USUARIOS
+            INNER JOIN SEGUINDO s ON u.ID_USUARIOS = s.ID_USUARIOS_ONG
+            LEFT JOIN (
+                SELECT ID_ATUALIZACOES, COUNT(*) as qtd_curtidas
+                FROM CURTIDAS
+                GROUP BY ID_ATUALIZACOES
+            ) c ON a.ID_ATUALIZACOES = c.ID_ATUALIZACOES
+            LEFT JOIN (
+                SELECT ID_ATUALIZACOES, COUNT(*) as qtd_comentarios
+                FROM COMENTARIOS
+                GROUP BY ID_ATUALIZACOES
+            ) co ON a.ID_ATUALIZACOES = co.ID_ATUALIZACOES
+            WHERE s.ID_USUARIOS_DOADOR = ? 
+                AND u.ATIVO = 1 
+                AND u.APROVACAO = 1
+            ORDER BY {ordem}
+        """, (id_doador,))
+
+        atualizacoes = cur.fetchall()
+
+        lista = []
+        if atualizacoes:
+            for att in atualizacoes:
+                data_str = att[4].strftime('%d/%m/%Y %H:%M') if att[4] else ''
+                lista.append({
+                    'id': att[0],
+                    'projeto_id': att[1],
+                    'titulo': att[2],
+                    'texto': att[3],
+                    'data': data_str,
+                    'foto': f'{att[0]}.jpeg' if att[5] else None,
+                    'ong_id': att[6],
+                    'ong_nome': att[7],
+                    'ong_foto': f'{att[6]}.jpeg',
+                    'qtd_curtidas': att[8] or 0,
+                    'qtd_comentarios': att[9] or 0
+                })
+
+        return jsonify({
+            'atualizacoes': lista,
+            'total': len(lista)
+        }), 200
+
+    except Exception as e:
+        print(f"ERRO feed_favoritas: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
