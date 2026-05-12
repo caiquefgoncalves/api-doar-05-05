@@ -253,7 +253,7 @@ def validar_adm():
         return jsonify({'error': 'Apenas administradores podem acessar esta rota'}), 403
     return None
 
-def gerar_qr_pix(chave_pix, nome, cidade, id, pasta_base, valor=None, projeto=False):
+def gerar_qr_pix(chave_pix, nome, cidade, id_ong, pasta_base, valor=None, projeto=False):
 
     def limpar(texto, max_len):
         if not texto:
@@ -269,8 +269,8 @@ def gerar_qr_pix(chave_pix, nome, cidade, id, pasta_base, valor=None, projeto=Fa
         cidade = "BRASIL"
 
     # 🔹 FUNÇÃO PRA MONTAR CAMPOS (necessário pro Pix)
-    def campo(id, valor):
-        return f"{id}{len(valor):02}{valor}"
+    def campo(id_campo, valor):
+        return f"{id_campo}{len(valor):02}{valor}"
 
     # 🔹 CORREÇÃO PRINCIPAL: montar campo 26 corretamente
     gui = campo("00", "BR.GOV.BCB.PIX")
@@ -314,10 +314,11 @@ def gerar_qr_pix(chave_pix, nome, cidade, id, pasta_base, valor=None, projeto=Fa
 
     payload_final = payload + crc16(payload)
 
+    # CORRIGIDO: id → id_ong
     if projeto == True:
-        nome_arquivo = f'pix_doacao_{id}.jpeg'
+        nome_arquivo = f'pix_doacao_{id_ong}.jpeg'
     else:
-        nome_arquivo = f'pix_ong_{id}.jpeg'
+        nome_arquivo = f'pix_ong_{id_ong}.jpeg'
 
     pasta = os.path.join(pasta_base, 'Pix')
     os.makedirs(pasta, exist_ok=True)
@@ -328,3 +329,111 @@ def gerar_qr_pix(chave_pix, nome, cidade, id, pasta_base, valor=None, projeto=Fa
     qr.save(caminho)
 
     return nome_arquivo, payload_final
+
+
+def formatar_cpf(cpf):
+    if not cpf:
+        return "-"
+    if len(cpf) != 11:
+        return cpf
+    return f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}"
+
+
+def header(pdf, titulo):
+    azul = (12, 89, 139)
+
+    pdf.set_font("Arial", "B", 18)
+    pdf.set_text_color(*azul)
+    pdf.cell(0, 10, f"Relatório {titulo}", ln=True, align="C")
+
+    pdf.set_font("Arial", "", 10)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(0, 6, "Plataforma Doar+", ln=True, align="C")
+
+    pdf.ln(5)
+
+    pdf.set_draw_color(*azul)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(10)
+
+
+def footer(pdf):
+    azul = (12, 89, 139)
+    azul_claro = (22, 124, 191)
+    rosa = (246, 86, 130)
+    laranja = (247, 181, 103)
+
+    pdf.set_y(-25)
+
+    largura = 190 / 4
+    cores = [azul, azul_claro, laranja, rosa]
+    x = 10
+
+    for cor in cores:
+        pdf.set_fill_color(*cor)
+        pdf.rect(x, pdf.get_y(), largura, 4, 'F')
+        x += largura
+
+def resumo_3_colunas(pdf, dados):
+    azul = (12, 89, 139)
+    largura = 190 / 3
+    y_inicial = pdf.get_y()
+
+    for titulo, valor in dados:
+        x_atual = pdf.get_x()
+
+        # título
+        pdf.set_font("Arial", "B", 9)
+        pdf.set_text_color(120, 120, 120)
+        pdf.multi_cell(largura, 5, titulo.upper(), align="C")
+
+        pdf.set_xy(x_atual, y_inicial + 5)
+
+        # valor
+        pdf.set_font("Arial", "B", 14)
+        pdf.set_text_color(*azul)
+        pdf.multi_cell(largura, 7, str(valor), align="C")
+
+        pdf.set_xy(x_atual + largura, y_inicial)
+
+    pdf.ln(25)
+
+def ranking_lista(pdf, titulo, dados, tipo="moeda"):
+    azul = (12, 89, 139)
+    cinza = (120, 120, 120)
+
+    pdf.set_font("Arial", "B", 13)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 8, titulo, ln=True)
+
+    pdf.ln(3)
+
+    for i, (nome, valor) in enumerate(dados, start=1):
+
+        # badge posição
+        pdf.set_fill_color(*azul)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(10, 6, f"{i}º", align="C", fill=True)
+
+        # nome
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Arial", "B", 11)
+        pdf.cell(90, 6, f" {nome}")
+
+        # valor
+        pdf.set_text_color(*cinza)
+        pdf.set_font("Arial", "B", 11)
+
+        if tipo == "moeda":
+            texto_valor = f"R$ {valor:.2f}".replace(",", ".").replace(".", ",")
+        elif tipo == "voluntariado":
+            texto_valor = str(valor) + " voluntário(s)"
+        else:
+            texto_valor = str(valor) + " curtida(s)"
+
+        pdf.cell(0, 6, texto_valor, ln=True, align="R")
+
+        pdf.ln(2)
+
+    pdf.ln(5)

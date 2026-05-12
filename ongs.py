@@ -79,7 +79,7 @@ def ver_ong_publica(id_ong):
                     chave_pix=ong[9],
                     nome=ong[1],
                     cidade=ong[6] if ong[6] else '',
-                    id=ong[0],
+                    id_ong=ong[0],  # ← CORRIGIDO
                     pasta_base=app.config['UPLOAD_FOLDER']
                 )
                 nome_qr = resultado[0]
@@ -797,6 +797,71 @@ def contador_seguidores(id_ong):
     except Exception as e:
         print(f"ERRO ao contar seguidores: {str(e)}")  # Debug
         return jsonify({'error': f'Erro ao contar seguidores: {str(e)}'}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+@app.route('/ong/doadores/<int:id_ong>', methods=['GET'])
+def doadores_ong(id_ong):
+    """Retorna os doadores que fizeram pelo menos uma doação para a ONG"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 2:
+        return jsonify({'error': 'Apenas ONGs podem acessar'}), 403
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        print(f"DEBUG - Buscando doadores da ONG {id_ong}")
+
+        # Buscar o último valor doado por cada doador
+        cur.execute("""
+            SELECT 
+                u.ID_USUARIOS, 
+                u.NOME, 
+                MAX(d.DATA_DOACAO) as ULTIMA_DOACAO,
+                (SELECT FIRST 1 d2.VALOR 
+                 FROM DOACOES d2 
+                 INNER JOIN PROJETOS p2 ON d2.ID_PROJETOS = p2.ID_PROJETOS
+                 WHERE d2.ID_USUARIOS = u.ID_USUARIOS AND p2.ID_USUARIOS = ?
+                 ORDER BY d2.DATA_DOACAO DESC) as ULTIMO_VALOR
+            FROM DOACOES d
+            INNER JOIN USUARIOS u ON d.ID_USUARIOS = u.ID_USUARIOS
+            INNER JOIN PROJETOS p ON d.ID_PROJETOS = p.ID_PROJETOS
+            WHERE p.ID_USUARIOS = ?
+            GROUP BY u.ID_USUARIOS, u.NOME
+            ORDER BY ULTIMA_DOACAO DESC
+        """, (id_ong, id_ong))
+
+        doadores = cur.fetchall()
+        print(f"DEBUG - Doadores encontrados: {len(doadores) if doadores else 0}")
+
+        lista = []
+        for d in doadores:
+            data_str = ''
+            if d[2]:
+                try:
+                    data_str = d[2].strftime('%d/%m/%Y')
+                except:
+                    data_str = str(d[2])
+            lista.append({
+                'id': d[0],
+                'nome': d[1],
+                'ultima_doacao': data_str,
+                'ultimo_valor': f'R$ {float(d[3] or 0):.2f}'.replace('.', ','),
+                'foto': f'{d[0]}.jpeg'
+            })
+
+        return jsonify({'doadores': lista}), 200
+
+    except Exception as e:
+        print(f"ERRO doadores_ong: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
     finally:
         cur.close()
         con.close()

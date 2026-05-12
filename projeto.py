@@ -407,13 +407,13 @@ def doar_projeto(id_projeto):
         con.commit()
 
         resultado = gerar_qr_pix(
-            projeto=True,
             chave_pix=ong[3],
             nome=ong[1],
             cidade=ong[2] if ong[2] else '',
-            id=id_doacao,
+            id_ong=int(id_doacao),
             pasta_base=app.config['UPLOAD_FOLDER'],
-            valor=str(valor)
+            valor=str(valor),
+            projeto=True
         )
 
         nome_qr = resultado[0]
@@ -532,6 +532,33 @@ def verificar_voluntario(id_usuario):
         return jsonify({
             'voluntario': count > 0
         }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+@app.route('/verificar_voluntario_projeto/<int:id_projeto>', methods=['GET'])
+def verificar_voluntario_projeto(id_projeto):
+    """Verifica se o doador já se voluntariou nesse projeto específico"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 1:
+        return jsonify({'voluntariou': False}), 200
+
+    id_doador = token_data['id_usuarios']
+
+    con = conexao()
+    cur = con.cursor()
+    try:
+        cur.execute("""
+            SELECT COUNT(*) FROM VOLUNTARIADO 
+            WHERE ID_USUARIOS = ? AND ID_PROJETOS = ?
+        """, (id_doador, id_projeto))
+        count = cur.fetchone()[0]
+
+        return jsonify({'voluntariou': count > 0}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     finally:

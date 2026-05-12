@@ -1,8 +1,39 @@
-from flask import jsonify, request, send_file
+# graficos.py
+from flask import jsonify, request, Response, send_file
 from main import app
 from db import conexao
-from funcao import decodificar_token
+from funcao import decodificar_token, formatar_cpf, footer, header, resumo_3_colunas, ranking_lista
+import pygal
+from pygal.style import Style
 from fpdf import FPDF
+
+
+# ============================================
+# ESTILO BASE PARA GRÁFICOS
+# ============================================
+estilo_padrao = Style(
+    background='white',
+    plot_background='white',
+    foreground='#333333',
+    foreground_strong='#333333',
+    foreground_subtle='#999999',
+    colors=('#f7b567', '#167cbf', '#f65682', '#4CAF50', '#9C27B0', '#FF9800', '#00BCD4', '#795548', '#607D8B', '#E91E63', '#3F51B5', '#8BC34A'),
+    font_family='Arial, sans-serif',
+    label_font_size=11,
+    major_label_font_size=13,
+    value_font_size=11,
+    title_font_size=16,
+    tooltip_font_size=11,
+    legend_font_size=11,
+    opacity='.85',
+    opacity_hover='1',
+    transition='200ms ease-in'
+)
+
+
+# ============================================
+# ROTAS DE DADOS (JSON)
+# ============================================
 
 @app.route('/minhas_doacoes', methods=['GET'])
 def minhas_doacoes():
@@ -19,7 +50,6 @@ def minhas_doacoes():
     cur = con.cursor()
 
     try:
-        # Buscar doações monetárias
         cur.execute("""
             SELECT d.VALOR, d.DATA_DOACAO, p.TITULO, u.NOME as ONG_NOME, u.ID_USUARIOS as ONG_ID, 'Monetário' as TIPO
             FROM DOACOES d
@@ -30,7 +60,6 @@ def minhas_doacoes():
         """, (id_doador,))
         doacoes = cur.fetchall()
 
-        # Buscar voluntariados
         cur.execute("""
             SELECT v.ID_VOLUNTARIADO, p.TITULO, u.NOME as ONG_NOME, u.ID_USUARIOS as ONG_ID, 'Voluntariado' as TIPO
             FROM VOLUNTARIADO v
@@ -94,29 +123,25 @@ def frequencia_doacoes():
     cur = con.cursor()
 
     try:
-        # Buscar contagem de doações por mês
         cur.execute("""
             SELECT 
                 EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
                 COUNT(*) as QTD
             FROM DOACOES d
-            WHERE d.ID_USUARIOS = ?
+            WHERE d.ID_USUARIOS = ? 
+            AND EXTRACT(YEAR FROM d.DATA_DOACAO) = 2026
             GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
             ORDER BY MES
         """, (id_doador,))
         doacoes_mes = cur.fetchall()
 
         meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-
-        # Criar dicionário com todos os meses zerados
         dados_meses = {mes: 0 for mes in meses}
 
-        # Preencher com dados reais
         for d in doacoes_mes:
             if d[0] and 1 <= int(d[0]) <= 12:
                 dados_meses[meses[int(d[0]) - 1]] = int(d[1])
 
-        # Converter para lista
         dados = [{'mes': mes, 'qtd': qtd} for mes, qtd in dados_meses.items()]
 
         return jsonify({'dados': dados}), 200
@@ -129,113 +154,658 @@ def frequencia_doacoes():
         con.close()
 
 
-@app.route('/admin/relatorio_doadores', methods=['GET'])
-def relatorio_doadores():
-    # erro = validar_adm()
-    # if erro:
-    #     return erro
+@app.route('/arrecadacao_mensal_ong', methods=['GET'])
+def arrecadacao_mensal_ong():
+    """Retorna dados de arrecadação mensal para a ONG logada"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 2:
+        return jsonify({'error': 'Apenas ONGs podem acessar'}), 403
+
+    id_ong = token_data['id_usuarios']
 
     con = conexao()
     cur = con.cursor()
+
     try:
-        cur.execute("SELECT ID_USUARIOS, NOME, CPF_CNPJ, EMAIL FROM USUARIOS WHERE TIPO = 1")
+        # arrecadacao_mensal_ong (ONG)
+        cur.execute("""
+            SELECT 
+                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
+                SUM(d.VALOR) as TOTAL
+            FROM DOACOES d
+            INNER JOIN PROJETOS p ON d.ID_PROJETOS = p.ID_PROJETOS
+            WHERE p.ID_USUARIOS = ?
+            AND EXTRACT(YEAR FROM d.DATA_DOACAO) = 2026
+            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
+            ORDER BY MES
+        """, (id_ong,))
+        doacoes_mes = cur.fetchall()
+
+        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        dados_meses = {mes: 0 for mes in meses}
+
+        for d in doacoes_mes:
+            if d[0] and 1 <= int(d[0]) <= 12:
+                dados_meses[meses[int(d[0]) - 1]] = float(d[1])
+
+        dados = [{'mes': mes, 'valor': valor} for mes, valor in dados_meses.items()]
+
+        return jsonify({'dados': dados}), 200
+
+    except Exception as e:
+        print(f"ERRO arrecadacao_mensal_ong: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+@app.route('/admin/arrecadacao_global', methods=['GET'])
+def arrecadacao_global():
+    """Retorna dados de arrecadação global (todas as ONGs) por mês"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 0:
+        return jsonify({'error': 'Apenas administradores podem acessar'}), 403
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 
+                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
+                SUM(d.VALOR) as TOTAL
+            FROM DOACOES d
+            WHERE EXTRACT(YEAR FROM d.DATA_DOACAO) = 2026
+            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
+            ORDER BY MES
+        """)
+        doacoes_mes = cur.fetchall()
+
+        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        dados_meses = {mes: 0 for mes in meses}
+
+        for d in doacoes_mes:
+            if d[0] and 1 <= int(d[0]) <= 12:
+                dados_meses[meses[int(d[0]) - 1]] = float(d[1])
+
+        dados = [{'mes': mes, 'valor': valor} for mes, valor in dados_meses.items()]
+
+        return jsonify({'dados': dados}), 200
+
+    except Exception as e:
+        print(f"ERRO arrecadacao_global: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+# ============================================
+# GRÁFICOS SVG (PYGAL)
+# ============================================
+
+@app.route('/frequencia_doacoes_svg', methods=['GET'])
+def frequencia_doacoes_svg():
+    """Gráfico SVG - Frequência de doações do doador"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 1:
+        return jsonify({'error': 'Apenas doadores podem acessar'}), 403
+
+    id_doador = token_data['id_usuarios']
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 
+                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
+                COUNT(*) as QTD
+            FROM DOACOES d
+            WHERE d.ID_USUARIOS = ?
+            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
+            ORDER BY MES
+        """, (id_doador,))
+        doacoes_mes = cur.fetchall()
+
+        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        dados_meses = {mes: 0 for mes in meses}
+
+        for d in doacoes_mes:
+            if d[0] and 1 <= int(d[0]) <= 12:
+                dados_meses[meses[int(d[0]) - 1]] = int(d[1])
+
+        chart = pygal.Bar(
+            style=estilo_padrao,
+            height=350,
+            show_legend=False,
+            x_label_rotation=0,
+            rounded_bars=4
+        )
+        chart.title = 'Frequência de Doações'
+        chart.x_labels = meses
+        chart.add('Doações', [dados_meses[mes] for mes in meses])
+
+        return Response(chart.render(), mimetype='image/svg+xml')
+
+    except Exception as e:
+        print(f"ERRO: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+@app.route('/arrecadacao_mensal_ong_svg', methods=['GET'])
+def arrecadacao_mensal_ong_svg():
+    """Gráfico SVG - Arrecadação mensal da ONG"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 2:
+        return jsonify({'error': 'Apenas ONGs podem acessar'}), 403
+
+    id_ong = token_data['id_usuarios']
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 
+                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
+                SUM(d.VALOR) as TOTAL
+            FROM DOACOES d
+            INNER JOIN PROJETOS p ON d.ID_PROJETOS = p.ID_PROJETOS
+            WHERE p.ID_USUARIOS = ?
+            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
+            ORDER BY MES
+        """, (id_ong,))
+        doacoes_mes = cur.fetchall()
+
+        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        dados_meses = {mes: 0 for mes in meses}
+
+        for d in doacoes_mes:
+            if d[0] and 1 <= int(d[0]) <= 12:
+                dados_meses[meses[int(d[0]) - 1]] = float(d[1])
+
+        chart = pygal.Bar(
+            style=estilo_padrao,
+            height=350,
+            show_legend=False,
+            x_label_rotation=0,
+            rounded_bars=4,
+            value_formatter=lambda x: f'R$ {x:,.2f}' if x > 0 else ''
+        )
+        chart.title = 'Arrecadação Mensal'
+        chart.x_labels = meses
+        chart.add('R$', [dados_meses[mes] for mes in meses])
+
+        return Response(chart.render(), mimetype='image/svg+xml')
+
+    except Exception as e:
+        print(f"ERRO: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+
+@app.route('/admin/arrecadacao_global_svg', methods=['GET'])
+def arrecadacao_global_svg():
+    """Gráfico SVG - Arrecadação global (todas as ONGs)"""
+    token_data = decodificar_token()
+    if token_data == False:
+        return jsonify({'error': 'Token necessário'}), 401
+    if token_data['tipo'] != 0:
+        return jsonify({'error': 'Apenas administradores podem acessar'}), 403
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 
+                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
+                SUM(d.VALOR) as TOTAL
+            FROM DOACOES d
+            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
+            ORDER BY MES
+        """)
+        doacoes_mes = cur.fetchall()
+
+        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        dados_meses = {mes: 0 for mes in meses}
+
+        for d in doacoes_mes:
+            if d[0] and 1 <= int(d[0]) <= 12:
+                dados_meses[meses[int(d[0]) - 1]] = float(d[1])
+
+        chart = pygal.Bar(
+            style=estilo_padrao,
+            height=350,
+            show_legend=False,
+            x_label_rotation=0,
+            rounded_bars=4,
+            value_formatter=lambda x: f'R$ {x:,.2f}' if x > 0 else ''
+        )
+        chart.title = 'Arrecadação Global'
+        chart.x_labels = meses
+        chart.add('R$', [dados_meses[mes] for mes in meses])
+
+        return Response(chart.render(), mimetype='image/svg+xml')
+
+    except Exception as e:
+        print(f"ERRO: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cur.close()
+        con.close()
+
+@app.route('/admin/relatorio_doadores', methods=['GET'])
+def relatorio_doadores():
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        cur.execute("""
+            SELECT ID_USUARIOS, NOME, CPF_CNPJ, EMAIL
+            FROM USUARIOS
+            WHERE TIPO = 1
+        """)
         usuarios = cur.fetchall()
 
         if not usuarios:
             return jsonify({'error': 'Nenhum doador encontrado'}), 404
 
+        total_doadores = len(usuarios)
+
+        cur.execute("SELECT COALESCE(SUM(VALOR), 0), COUNT(*) FROM DOACOES")
+        total_valor, total_doacoes = cur.fetchone()
+
+        cur.execute("""
+            SELECT U.NOME, SUM(D.VALOR) as total
+            FROM DOACOES D
+            JOIN USUARIOS U ON U.ID_USUARIOS = D.ID_USUARIOS
+            GROUP BY U.NOME
+            ORDER BY total DESC
+            ROWS 5
+        """)
+        top_doadores = cur.fetchall()
+
+        cur.execute("""
+            SELECT U.NOME, COUNT(C.ID_CURTIDAS) as total
+            FROM CURTIDAS C
+            JOIN USUARIOS U ON U.ID_USUARIOS = C.ID_USUARIOS_DOADOR
+            GROUP BY U.NOME
+            ORDER BY total DESC
+            ROWS 5
+        """)
+        top_curtidas = cur.fetchall()
+
         pdf = FPDF()
         pdf.add_page()
 
-        # 🎨 CORES
-        azul = (12, 89, 139)
-        azul_claro = (22, 124, 191)
-        rosa = (246, 86, 130)
-        laranja = (247, 181, 103)
+        header(pdf, "doadores")
 
-            # 🖼️ LOGO (ajuste o caminho)
-        # pdf.image('static/logo.png', x=80, y=10, w=50)
-        pdf.ln(40)
-
-            # 🧾 TÍTULO
-        pdf.set_font("Arial", "B", 16)
-        pdf.set_text_color(*azul)
-        pdf.cell(0, 10, "Relatório de Doadores", ln=True, align="C")
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "RESUMO", ln=True)
 
         pdf.ln(5)
 
-        # 🔸 LINHA DECORATIVA
-        pdf.set_draw_color(*azul)
-        pdf.set_line_width(1)
-        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-        pdf.ln(10)
+        resumo_3_colunas(pdf, [
+            ("Total de doadores", total_doadores),
+            ("Total de doações", total_doacoes),
+            ("Valor arrecadado", f"R$ {total_valor:,.2f}".replace(",", ".").replace(".", ",", 1))
+        ])
 
-            # 📋 LISTA
+        ranking_lista(pdf, "MAIORES DOADORES", top_doadores, tipo="moeda")
+        ranking_lista(pdf, "MAIORES ENGAJADORES", top_curtidas, tipo="numero")
+
+        azul = (12, 89, 139)
+        cinza = (120, 120, 120)
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "LISTA DE DOADORES", ln=True)
+
+        pdf.ln(3)
+
         for u in usuarios:
-            id_usuario = u[0]
-            nome = u[1]
-            cpf = u[2]
-            email = u[3]
+            id_usuario, nome, cpf, email = u
 
-                # 🔹 Nome
-            pdf.set_font("Arial", "B", 12)
+            pdf.set_font("Arial", "B", 11)
             pdf.set_text_color(*azul)
-            pdf.cell(0, 8, nome, ln=True)
+            pdf.cell(0, 6, nome, ln=True)
 
-                # 🔹 Infos
-            pdf.set_font("Arial", "", 11)
+            pdf.set_font("Arial", "", 10)
             pdf.set_text_color(0, 0, 0)
-            pdf.cell(0, 6, f"ID: {id_usuario}", ln=True)
-            pdf.cell(0, 6, f"Email: {email}", ln=True)
+            pdf.cell(0, 5, f"ID: {id_usuario}", ln=True)
+            pdf.cell(0, 5, f"Email: {email}", ln=True)
+            pdf.cell(0, 5, f"CPF: {formatar_cpf(cpf)}", ln=True)
 
-                # 🔹 CPF (rosa)
-            pdf.set_text_color(*rosa)
-            pdf.cell(0, 6, f"CPF: {cpf}", ln=True)
+            pdf.ln(5)
 
-                # 🔸 Separador (laranja)
-            pdf.set_draw_color(*laranja)
+            pdf.set_draw_color(*cinza)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
 
             pdf.ln(5)
 
-            # =========================
-            # 📌 FOOTER ESTILO HTML
-            # =========================
+        footer(pdf)
 
-        pdf.set_y(-30)
-        largura_total = 190
-        bloco = largura_total / 4
+        pdf_path = "relatorio_doadores.pdf"
+        caminho = os.path.join(app.config['UPLOAD_FOLDER'], 'Relatorios')
+        os.makedirs(caminho, exist_ok=True)
+        caminho_pdf = os.path.join(caminho, pdf_path)
+        pdf.output(caminho_pdf)
 
-        cores = [azul, azul_claro, laranja, rosa]
-        x = 10
-
-            # 🎨 barra colorida
-        for cor in cores:
-            pdf.set_fill_color(*cor)
-            pdf.rect(x, pdf.get_y(), bloco, 4, 'F')
-            x += bloco
-
-        pdf.ln(6)
-
-            # 🧱 fundo cinza
-        pdf.set_fill_color(75, 77, 76)
-        y_fundo = pdf.get_y()
-        pdf.rect(10, y_fundo, 190, 20, 'F')
-
-            # 📝 texto
-        pdf.set_y(y_fundo + 6)
-        pdf.set_text_color(200, 200, 200)
-        pdf.set_font("Arial", "", 9)
-        pdf.cell(0, 5, "© 2026 Doar + — Todos os direitos reservados.", 0, 1, "C")
-
-        pdf_path = "relatorio_usuarios.pdf"
-        pdf.output(pdf_path)
-        return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
-
+        return send_file(caminho_pdf, as_attachment=True)
 
     except Exception as e:
         con.rollback()
-        return jsonify({'error': f'Erro: {str(e)}'}), 500
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        cur.close()
+        con.close()
+
+
+@app.route('/admin/relatorio_ongs', methods=['GET'])
+def relatorio_ongs():
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        cur.execute("""
+            SELECT ID_USUARIOS, NOME, CPF_CNPJ, EMAIL
+            FROM USUARIOS
+            WHERE TIPO = 2
+        """)
+        ongs = cur.fetchall()
+
+        if not ongs:
+            return jsonify({'error': 'Nenhuma ONG encontrada'}), 404
+
+        total_ongs = len(ongs)
+
+        cur.execute("SELECT COALESCE(SUM(VALOR), 0), COUNT(*) FROM DOACOES")
+        retorno = cur.fetchone()
+        total_valor = retorno[0]
+
+        cur.execute("""
+            SELECT COUNT(V.ID_VOLUNTARIADO)
+            FROM VOLUNTARIADO V
+        """)
+        total_voluntarios = cur.fetchone()[0]
+
+        cur.execute("""
+            SELECT U.NOME, COALESCE(SUM(D.VALOR), 0) as total
+            FROM USUARIOS U
+            LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
+            LEFT JOIN DOACOES D ON D.ID_PROJETOS = P.ID_PROJETOS
+            WHERE U.TIPO = 2
+            GROUP BY U.NOME
+            ORDER BY total DESC
+            ROWS 5
+        """)
+        ongs_doacoes = cur.fetchall()
+
+        cur.execute("""
+            SELECT U.NOME, COUNT(V.ID_VOLUNTARIADO) as total
+            FROM USUARIOS U
+            LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
+            LEFT JOIN VOLUNTARIADO V ON V.ID_PROJETOS = P.ID_PROJETOS
+            WHERE U.TIPO = 2
+            GROUP BY U.NOME
+            ORDER BY total DESC
+            ROWS 5
+        """)
+        ongs_voluntariado = cur.fetchall()
+
+        cur.execute("""
+            SELECT
+                U.ID_USUARIOS,
+                U.NOME,
+                U.CPF_CNPJ,
+                U.EMAIL,
+                COUNT(D.ID_DOACOES),
+                COALESCE(SUM(D.VALOR), 0),
+                COUNT(V.ID_VOLUNTARIADO)
+            FROM USUARIOS U
+            LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
+            LEFT JOIN DOACOES D ON D.ID_PROJETOS = P.ID_PROJETOS
+            LEFT JOIN VOLUNTARIADO V ON V.ID_PROJETOS = P.ID_PROJETOS
+            WHERE U.TIPO = 2
+            GROUP BY U.ID_USUARIOS, U.NOME, U.CPF_CNPJ, U.EMAIL
+            ORDER BY NOME ASC
+        """)
+        lista_ongs = cur.fetchall()
+
+        pdf = FPDF()
+        pdf.add_page()
+
+        header(pdf, "ONGs")
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "RESUMO DAS ONGs", ln=True)
+
+        pdf.ln(5)
+
+        resumo_3_colunas(pdf, [
+            ("Total de ONGs", total_ongs),
+            ("Arrecadado", f"R$ {total_valor:,.2f}".replace(",", ".").replace(".", ",", 1)),
+            ("Voluntários", total_voluntarios)
+        ])
+
+        ranking_lista(pdf, "ONGS COM MAIOR ARRECADAÇÃO", ongs_doacoes, tipo="moeda")
+        ranking_lista(pdf, "ONGS COM MAIS PEDIDOS DE VOLUNTARIADO", ongs_voluntariado, tipo="voluntariado")
+
+        azul = (12, 89, 139)
+        cinza = (120, 120, 120)
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "LISTA DE ONGs", ln=True)
+
+        pdf.ln(3)
+
+        for ong in lista_ongs:
+            id_ong, nome, cnpj, email, qtd_doacoes, total_ong, qtd_voluntarios = ong
+
+            pdf.set_font("Arial", "B", 11)
+            pdf.set_text_color(*azul)
+            pdf.cell(0, 6, nome, ln=True)
+
+            pdf.set_font("Arial", "", 10)
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(0, 5, f"ID: {id_ong}", ln=True)
+            pdf.cell(0, 5, f"Email: {email}", ln=True)
+            pdf.cell(0, 5, f"CNPJ: {formatar_cpf(cnpj)}", ln=True)
+
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(0, 5, f"Doações: {qtd_doacoes}", ln=True)
+            pdf.cell(0, 5, f"Voluntários: {qtd_voluntarios}", ln=True)
+            pdf.cell(0, 5, f"Total arrecadado: R$ {total_ong:,.2f}".replace(",", ".").replace(".", ",", 1), ln=True)
+
+            pdf.ln(5)
+
+            pdf.set_draw_color(*cinza)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+
+            pdf.ln(5)
+
+        footer(pdf)
+
+        pdf_path = "relatorio_ongs.pdf"
+        caminho = os.path.join(app.config['UPLOAD_FOLDER'], 'Relatorios')
+        os.makedirs(caminho, exist_ok=True)
+        caminho_pdf = os.path.join(caminho, pdf_path)
+        pdf.output(caminho_pdf)
+
+        return send_file(caminho_pdf, as_attachment=True)
+
+    except Exception as e:
+        con.rollback()
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        cur.close()
+        con.close()
+
+@app.route('/admin/relatorio_ongs', methods=['GET'])
+def relatorio_ongs():
+
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+
+        cur.execute("""
+            SELECT ID_USUARIOS, NOME, CPF_CNPJ, EMAIL
+            FROM USUARIOS
+            WHERE TIPO = 2
+        """)
+        ongs = cur.fetchall()
+
+        if not ongs:
+            return jsonify({'error': 'Nenhuma ONG encontrada'}), 404
+
+        total_ongs = len(ongs)
+
+
+        cur.execute("SELECT COALESCE(SUM(VALOR), 0), COUNT(*) FROM DOACOES")
+        retorno = cur.fetchone()
+        total_valor = retorno[0]
+
+
+        cur.execute("""
+            SELECT COUNT(V.ID_VOLUNTARIADO)
+            FROM VOLUNTARIADO V
+        """)
+        total_voluntarios = cur.fetchone()[0]
+
+
+        cur.execute("""
+            SELECT U.NOME, COALESCE(SUM(D.VALOR), 0) as total
+            FROM USUARIOS U
+            LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
+            LEFT JOIN DOACOES D ON D.ID_PROJETOS = P.ID_PROJETOS
+            WHERE U.TIPO = 2
+            GROUP BY U.NOME
+            ORDER BY total DESC
+            ROWS 5
+        """)
+        ongs_doacoes = cur.fetchall()
+
+
+        cur.execute("""
+            SELECT U.NOME, COUNT(V.ID_VOLUNTARIADO) as total
+            FROM USUARIOS U
+            LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
+            LEFT JOIN VOLUNTARIADO V ON V.ID_PROJETOS = P.ID_PROJETOS
+            WHERE U.TIPO = 2
+            GROUP BY U.NOME
+            ORDER BY total DESC
+            ROWS 5
+        """)
+        ongs_voluntariado = cur.fetchall()
+
+        cur.execute("""
+            SELECT 
+                U.ID_USUARIOS,
+                U.NOME,
+                U.CPF_CNPJ,
+                U.EMAIL,
+                COUNT(D.ID_DOACOES),
+                COALESCE(SUM(D.VALOR), 0),
+                COUNT(V.ID_VOLUNTARIADO)
+            FROM USUARIOS U
+            LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
+            LEFT JOIN DOACOES D ON D.ID_PROJETOS = P.ID_PROJETOS
+            LEFT JOIN VOLUNTARIADO V ON V.ID_PROJETOS = P.ID_PROJETOS
+            WHERE U.TIPO = 2
+            GROUP BY U.ID_USUARIOS, U.NOME, U.CPF_CNPJ, U.EMAIL
+                ORDER BY NOME ASC
+        """)
+        lista_ongs = cur.fetchall()
+
+
+        pdf = FPDF()
+        pdf.add_page()
+
+        header(pdf, "ONGs")
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "RESUMO DAS ONGs", ln=True)
+
+        pdf.ln(5)
+
+        resumo_3_colunas(pdf, [
+            ("Total de ONGs", total_ongs),
+            ("Arrecadado", f"R$ {total_valor:,.2f}".replace(",", ".").replace(".", ",", 1)),
+            ("Voluntários", total_voluntarios)
+        ])
+
+        ranking_lista(pdf, "ONGS COM MAIOR ARRECADAÇÃO", ongs_doacoes, tipo="moeda")
+        ranking_lista(pdf, "ONGS COM MAIS PEDIDOS DE VOLUNTARIADO", ongs_voluntariado, tipo="voluntariado")
+
+        azul = (12, 89, 139)
+        cinza = (120, 120, 120)
+
+        pdf.set_font("Arial", "B", 13)
+        pdf.cell(0, 8, "LISTA DE ONGs", ln=True)
+
+        pdf.ln(3)
+
+        for ong in lista_ongs:
+            id_ong, nome, cnpj, email, qtd_doacoes, total_ong, qtd_voluntarios = ong
+
+            pdf.set_font("Arial", "B", 11)
+            pdf.set_text_color(*azul)
+            pdf.cell(0, 6, nome, ln=True)
+
+            pdf.set_font("Arial", "", 10)
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(0, 5, f"ID: {id_ong}", ln=True)
+            pdf.cell(0, 5, f"Email: {email}", ln=True)
+
+            pdf.cell(0, 5, f"CNPJ: {formatar_cpf(cnpj)}", ln=True)
+
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(0, 5, f"Doações: {qtd_doacoes}", ln=True)
+            pdf.cell(0, 5, f"Voluntários: {qtd_voluntarios}", ln=True)
+
+            pdf.cell(
+                0, 5,
+                f"Total arrecadado: R$ {total_ong:,.2f}".replace(",", ".").replace(".", ",", 1),
+                ln=True
+            )
+
+            pdf.ln(5)
+
+            pdf.set_draw_color(*cinza)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+
+            pdf.ln(5)
+
+        footer(pdf)
+
+        pdf_path = "relatorio_ongs.pdf"
+        pdf.output(pdf_path)
+
+        return send_file(pdf_path, as_attachment=True)
+
+    except Exception as e:
+        con.rollback()
+        return jsonify({'error': str(e)}), 500
 
     finally:
         cur.close()
