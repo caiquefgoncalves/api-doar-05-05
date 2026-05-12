@@ -67,6 +67,7 @@ from projeto import *
 from ongs import *
 from atualizacao import *
 from comentarios import *
+from graficos_relatorio import *
 
 
 if __name__ == '__main__':

@@ -921,7 +921,7 @@ def bloquear(id_usuarios):
         # Se for bloqueio e tiver motivo, envia e-mail
         if acao == 'bloquear' and motivo:
             tipo_usuario = "ONG" if usuario[3] == 2 else "Doador"
-            html = render_template('template_bloqueio.html',
+            html = render_template('template_bloqueio_doador.html',
                                    nome=usuario[1],
                                    motivo=motivo,
                                    tipo=tipo_usuario)

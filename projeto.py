@@ -407,12 +407,13 @@ def doar_projeto(id_projeto):
         con.commit()
 
         resultado = gerar_qr_pix(
+            projeto=True,
             chave_pix=ong[3],
             nome=ong[1],
             cidade=ong[2] if ong[2] else '',
-            id_ong=id_doacao,
+            id=id_doacao,
             pasta_base=app.config['UPLOAD_FOLDER'],
-            projeto=True
+            valor=str(valor)
         )
 
         nome_qr = resultado[0]

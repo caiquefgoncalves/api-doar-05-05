@@ -79,7 +79,7 @@ def ver_ong_publica(id_ong):
                     chave_pix=ong[9],
                     nome=ong[1],
                     cidade=ong[6] if ong[6] else '',
-                    id_ong=ong[0],
+                    id=ong[0],
                     pasta_base=app.config['UPLOAD_FOLDER']
                 )
                 nome_qr = resultado[0]

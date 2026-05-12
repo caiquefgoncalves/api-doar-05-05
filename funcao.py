@@ -253,7 +253,7 @@ def validar_adm():
         return jsonify({'error': 'Apenas administradores podem acessar esta rota'}), 403
     return None
 
-def gerar_qr_pix(chave_pix, nome, cidade, id_ong, pasta_base, valor=None):
+def gerar_qr_pix(chave_pix, nome, cidade, id, pasta_base, valor=None, projeto=False):
 
     def limpar(texto, max_len):
         if not texto:
@@ -286,7 +286,7 @@ def gerar_qr_pix(chave_pix, nome, cidade, id_ong, pasta_base, valor=None):
     )
 
     if valor:
-        valor_str = f"{valor:.2f}"
+        valor_str = f"{float(valor):.2f}"
         payload += campo("54", valor_str)
 
     payload += (
@@ -314,7 +314,10 @@ def gerar_qr_pix(chave_pix, nome, cidade, id_ong, pasta_base, valor=None):
 
     payload_final = payload + crc16(payload)
 
-    nome_arquivo = f'pix_{id_ong}.jpeg'
+    if projeto == True:
+        nome_arquivo = f'pix_doacao_{id}.jpeg'
+    else:
+        nome_arquivo = f'pix_ong_{id}.jpeg'
 
     pasta = os.path.join(pasta_base, 'Pix')
     os.makedirs(pasta, exist_ok=True)
