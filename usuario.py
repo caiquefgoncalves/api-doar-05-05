@@ -524,13 +524,17 @@ def login():
     cpf_cnpj = request.json.get('cpf_cnpj')
     senha = request.json.get('senha')
 
+    # Verifica se já está logado
+    if decodificar_token() != False:
+        return jsonify({'error': 'Você já está logado. Faça logout primeiro.'}), 400
+
     con = conexao()
     cur = con.cursor()
 
     try:
         cur.execute("""SELECT ID_USUARIOS, TIPO, NOME, CPF_CNPJ, SENHA, TENTATIVA,
-                              EMAIL_CONFIRMACAO, ATIVO, APROVACAO
-                       FROM USUARIOS WHERE CPF_CNPJ = ?""", (cpf_cnpj,))
+        EMAIL_CONFIRMACAO, ATIVO, APROVACAO
+        FROM USUARIOS WHERE CPF_CNPJ = ?""", (cpf_cnpj,))
 
         usuario = cur.fetchone()
         if not usuario:
@@ -544,6 +548,18 @@ def login():
         email_confirmacao = usuario[6]
         ativo = usuario[7]
         aprovacao = usuario[8]
+
+        cur.execute("""SELECT ID_VOLUNTARIADO FROM VOLUNTARIADO
+        WHERE ID_USUARIOS = ?""", (id_usuarios,))
+
+        voluntario = cur.fetchone()
+
+        if voluntario:
+            voluntariado = True
+        else:
+            voluntariado = False
+
+        foto_perfil = f'{id_usuarios}.jpeg'
 
         if tentativa > 3 and tipo != 0:
             return jsonify({"error": "Usuário bloqueado! Contate o administrador"}), 400
@@ -564,23 +580,25 @@ def login():
 
             token = gerar_token(tipo, id_usuarios, 10)
             resp = make_response(jsonify({
-                'message': f'Bem-vindo {nome}!',
-                'nome': nome,
-                'token': token,
-                'tipo': tipo
+            'message': f'Bem-vindo {nome}!',
+            'nome': nome,
+            'token': token,
+            'voluntariado': voluntariado,
+            'foto_perfil': foto_perfil
             }))
             resp.set_cookie('acess_token', token, httponly=True, secure=False, samesite='Lax', path="/", max_age=7600)
             return resp
 
         if tipo != 0:
             tentativa = tentativa + 1
-            cur.execute("UPDATE USUARIOS SET TENTATIVA = ? WHERE ID_USUARIOS = ?", (tentativa, id_usuarios))
-            con.commit()
+        cur.execute("UPDATE USUARIOS SET TENTATIVA = ? WHERE ID_USUARIOS = ?", (tentativa, id_usuarios))
+        con.commit()
 
         return jsonify({"error": "Senha incorreta"}), 400
 
     except Exception as e:
-        return jsonify({'error': f'Erro: {str(e)}'}), 500
+        print(e)
+        return jsonify({'message': f'Erro: {e}'}), 500
     finally:
         cur.close()
         con.close()
