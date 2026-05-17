@@ -302,7 +302,7 @@ def editar_usuarios(id_usuarios):
             nome_imagem = f'{id_usuarios}.jpeg'
 
             # Define diretório
-            caminho_imagem_destino = os.path.join(app.config['UPLOAD_FOLDER'], "Usuários")
+            caminho_imagem_destino = os.path.join(app.config['UPLOAD_FOLDER'], "Usuarios")
 
             # Cria diretório se não existir
             os.makedirs(caminho_imagem_destino, exist_ok=True)
