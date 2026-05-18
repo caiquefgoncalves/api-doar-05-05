@@ -5,7 +5,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Configuração CORS COMPLETA
+
 CORS(app,
      origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://192.168.0.135:5173", "10.92.3.167", "10.92.3.158", "10.92.3.152"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],

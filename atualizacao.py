@@ -5,6 +5,7 @@ from db import conexao
 from funcao import decodificar_token
 import os
 from datetime import datetime
+import random
 
 
 # ============================================
@@ -79,6 +80,31 @@ def feed_atualizacoes():
                     'qtd_curtidas': a[8],
                     'qtd_comentarios': a[9]
                     })
+
+        cur.execute("""SELECT ID_USUARIOS FROM USUARIOS
+        WHERE TIPO = 2 AND APROVACAO = 1 AND ATIVO = 1""")
+        ids_ongs = cur.fetchall()
+
+        if not ids_ongs:
+            ongs = 'Não há nenhuma ONG cadastrada'
+        else:
+            ids_sorteado = random.sample(ids_ongs, 3)
+            ids_sorteado_formatado = []
+            for id in ids_sorteado:
+                ids_sorteado_formatado.append(id[0])
+
+            ongs = []
+            for id in ids_sorteado_formatado:
+                cur.execute("""SELECT ID_USUARIOS, NOME
+                FROM USUARIOS WHERE ID_USUARIOS = ?""", (id, ))
+                ong = cur.fetchone()
+                ongs.append({
+                    "id": ong[0],
+                    "nome": ong[1],
+                    "foto": f'{ong[0]}.jpeg'
+                })
+
+            return jsonify({'atualizacoes': lista, 'ongs': ongs}), 200
 
         return jsonify({'atualizacoes': lista}), 200
 

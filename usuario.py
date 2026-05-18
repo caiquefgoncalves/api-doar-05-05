@@ -824,7 +824,7 @@ def verificar_codigo():
         tipo = cursor.fetchone()[0]
 
         # Gera token temporário
-        token = gerar_token(tipo, id_usuarios, 5)
+        token = gerar_token(tipo, id_usuarios, 1440)
 
         # Cria resposta com cookie
         resp = make_response(jsonify({'message': "Código correto! Você tem 5 minutos para alterar sua senha", 'token': token, 'id': id_usuarios}), 200)
