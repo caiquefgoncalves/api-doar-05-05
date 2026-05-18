@@ -17,7 +17,7 @@ def feed_atualizacoes():
 
     pagina = int(request.args.get('pagina', 0))
     limite = int(request.args.get('limite', 4))
-    offset = pagina * limite
+    atualizacoes_puladas = pagina * limite
 
     con = conexao()
     cur = con.cursor()
@@ -25,8 +25,8 @@ def feed_atualizacoes():
     try:
         ordem = 'ASC' if filtro == 'antigos' else 'DESC'
 
-        inicio = offset + 1
-        fim = offset + limite
+        inicio = atualizacoes_puladas + 1
+        fim = atualizacoes_puladas + limite
 
         cur.execute(f"""
         SELECT a.ID_ATUALIZACOES, a.ID_PROJETOS, a.TITULO,
