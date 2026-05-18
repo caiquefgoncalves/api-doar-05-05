@@ -2,7 +2,7 @@
 from flask import jsonify, request, Response, send_file
 from main import app
 from db import conexao
-from funcao import decodificar_token, formatar_cpf, footer, header, resumo_3_colunas, ranking_lista
+from funcao import decodificar_token, formatar_cpf, footer, header, resumo_3_colunas, ranking_lista, formatar_cnpj
 import pygal
 from pygal.style import Style
 from fpdf import FPDF
@@ -220,19 +220,18 @@ def arrecadacao_global():
         con.close()
 
 
-
-
 @app.route('/admin/relatorio_doadores', methods=['GET'])
 def relatorio_doadores():
-
     con = conexao()
     cur = con.cursor()
 
     try:
+        # Lista de doadores em ordem crescente por ID
         cur.execute("""
             SELECT ID_USUARIOS, NOME, CPF_CNPJ, EMAIL
             FROM USUARIOS
             WHERE TIPO = 1
+            ORDER BY ID_USUARIOS ASC
         """)
         usuarios = cur.fetchall()
 
@@ -244,6 +243,7 @@ def relatorio_doadores():
         cur.execute("SELECT COALESCE(SUM(VALOR), 0), COUNT(*) FROM DOACOES")
         total_valor, total_doacoes = cur.fetchone()
 
+        # Top 5 maiores doadores (por valor)
         cur.execute("""
             SELECT U.NOME, SUM(D.VALOR) as total
             FROM DOACOES D
@@ -254,6 +254,7 @@ def relatorio_doadores():
         """)
         top_doadores = cur.fetchall()
 
+        # Top 5 maiores engajadores (por curtidas)
         cur.execute("""
             SELECT U.NOME, COUNT(C.ID_CURTIDAS) as total
             FROM CURTIDAS C
@@ -280,8 +281,20 @@ def relatorio_doadores():
             ("Valor arrecadado", f"R$ {total_valor:,.2f}".replace(",", ".").replace(".", ",", 1))
         ])
 
-        ranking_lista(pdf, "MAIORES DOADORES", top_doadores, tipo="moeda")
-        ranking_lista(pdf, "MAIORES ENGAJADORES", top_curtidas, tipo="numero")
+        # Só mostra o ranking se houver doadores
+        if top_doadores:
+            ranking_lista(pdf, "MAIORES DOADORES", top_doadores, tipo="moeda")
+        else:
+            pdf.set_font("Arial", "I", 10)
+            pdf.cell(0, 6, "Nenhuma doação registrada", ln=True)
+            pdf.ln(3)
+
+        if top_curtidas:
+            ranking_lista(pdf, "MAIORES ENGAJADORES", top_curtidas, tipo="numero")
+        else:
+            pdf.set_font("Arial", "I", 10)
+            pdf.cell(0, 6, "Nenhum engajamento registrado", ln=True)
+            pdf.ln(3)
 
         azul = (12, 89, 139)
         cinza = (120, 120, 120)
@@ -302,7 +315,10 @@ def relatorio_doadores():
             pdf.set_text_color(0, 0, 0)
             pdf.cell(0, 5, f"ID: {id_usuario}", ln=True)
             pdf.cell(0, 5, f"Email: {email}", ln=True)
-            pdf.cell(0, 5, f"CPF: {formatar_cpf(cpf)}", ln=True)
+
+            # Formatar CPF com máscara
+            cpf_formatado = formatar_cpf(cpf) if cpf else "Não informado"
+            pdf.cell(0, 5, f"CPF: {cpf_formatado}", ln=True)
 
             pdf.ln(5)
 
@@ -322,6 +338,7 @@ def relatorio_doadores():
         return send_file(caminho_pdf, as_attachment=True)
 
     except Exception as e:
+        print(f"ERRO relatorio_doadores: {e}")
         con.rollback()
         return jsonify({'error': str(e)}), 500
 
@@ -339,11 +356,12 @@ def relatorio_ongs():
     cur = con.cursor()
 
     try:
-
+        # Buscar TODAS as ONGs para a lista completa
         cur.execute("""
             SELECT ID_USUARIOS, NOME, CPF_CNPJ, EMAIL
             FROM USUARIOS
             WHERE TIPO = 2
+            ORDER BY NOME ASC
         """)
         ongs = cur.fetchall()
 
@@ -352,19 +370,19 @@ def relatorio_ongs():
 
         total_ongs = len(ongs)
 
-
+        # Total arrecadado (todas as ONGs)
         cur.execute("SELECT COALESCE(SUM(VALOR), 0), COUNT(*) FROM DOACOES")
         retorno = cur.fetchone()
         total_valor = retorno[0]
 
-
+        # Total de voluntariados
         cur.execute("""
             SELECT COUNT(V.ID_VOLUNTARIADO)
             FROM VOLUNTARIADO V
         """)
         total_voluntarios = cur.fetchone()[0]
 
-
+        # Ranking ONGs por arrecadação (APENAS com valor > 0)
         cur.execute("""
             SELECT U.NOME, COALESCE(SUM(D.VALOR), 0) as total
             FROM USUARIOS U
@@ -372,12 +390,13 @@ def relatorio_ongs():
             LEFT JOIN DOACOES D ON D.ID_PROJETOS = P.ID_PROJETOS
             WHERE U.TIPO = 2
             GROUP BY U.NOME
+            HAVING COALESCE(SUM(D.VALOR), 0) > 0
             ORDER BY total DESC
             ROWS 5
         """)
         ongs_doacoes = cur.fetchall()
 
-
+        # Ranking ONGs por voluntariados (APENAS com count > 0)
         cur.execute("""
             SELECT U.NOME, COUNT(V.ID_VOLUNTARIADO) as total
             FROM USUARIOS U
@@ -385,30 +404,31 @@ def relatorio_ongs():
             LEFT JOIN VOLUNTARIADO V ON V.ID_PROJETOS = P.ID_PROJETOS
             WHERE U.TIPO = 2
             GROUP BY U.NOME
+            HAVING COUNT(V.ID_VOLUNTARIADO) > 0
             ORDER BY total DESC
             ROWS 5
         """)
         ongs_voluntariado = cur.fetchall()
 
+        # Lista detalhada de TODAS as ONGs (incluindo as com 0)
         cur.execute("""
             SELECT 
                 U.ID_USUARIOS,
                 U.NOME,
                 U.CPF_CNPJ,
                 U.EMAIL,
-                COUNT(D.ID_DOACOES),
-                COALESCE(SUM(D.VALOR), 0),
-                COUNT(V.ID_VOLUNTARIADO)
+                COUNT(DISTINCT D.ID_DOACOES) as QTD_DOACOES,
+                COALESCE(SUM(D.VALOR), 0) as TOTAL_DOACOES,
+                COUNT(DISTINCT V.ID_VOLUNTARIADO) as QTD_VOLUNTARIADOS
             FROM USUARIOS U
             LEFT JOIN PROJETOS P ON P.ID_USUARIOS = U.ID_USUARIOS
             LEFT JOIN DOACOES D ON D.ID_PROJETOS = P.ID_PROJETOS
             LEFT JOIN VOLUNTARIADO V ON V.ID_PROJETOS = P.ID_PROJETOS
             WHERE U.TIPO = 2
             GROUP BY U.ID_USUARIOS, U.NOME, U.CPF_CNPJ, U.EMAIL
-                ORDER BY NOME ASC
+            ORDER BY U.ID_USUARIOS ASC
         """)
         lista_ongs = cur.fetchall()
-
 
         pdf = FPDF()
         pdf.add_page()
@@ -426,14 +446,27 @@ def relatorio_ongs():
             ("Voluntários", total_voluntarios)
         ])
 
-        ranking_lista(pdf, "ONGS COM MAIOR ARRECADAÇÃO", ongs_doacoes, tipo="moeda")
-        ranking_lista(pdf, "ONGS COM MAIS PEDIDOS DE VOLUNTARIADO", ongs_voluntariado, tipo="voluntariado")
+        # Só mostra o ranking se houver ONGs com doações
+        if ongs_doacoes:
+            ranking_lista(pdf, "ONGS COM MAIOR ARRECADAÇÃO", ongs_doacoes, tipo="moeda")
+        else:
+            pdf.set_font("Arial", "I", 10)
+            pdf.cell(0, 6, "Nenhuma ONG com arrecadação registrada", ln=True)
+            pdf.ln(3)
+
+        # Só mostra o ranking se houver ONGs com voluntariados
+        if ongs_voluntariado:
+            ranking_lista(pdf, "ONGS COM MAIS PEDIDOS DE VOLUNTARIADO", ongs_voluntariado, tipo="voluntariado")
+        else:
+            pdf.set_font("Arial", "I", 10)
+            pdf.cell(0, 6, "Nenhuma ONG com voluntariado registrado", ln=True)
+            pdf.ln(3)
 
         azul = (12, 89, 139)
         cinza = (120, 120, 120)
 
         pdf.set_font("Arial", "B", 13)
-        pdf.cell(0, 8, "LISTA DE ONGs", ln=True)
+        pdf.cell(0, 8, "LISTA COMPLETA DE ONGs", ln=True)
 
         pdf.ln(3)
 
@@ -449,7 +482,9 @@ def relatorio_ongs():
             pdf.cell(0, 5, f"ID: {id_ong}", ln=True)
             pdf.cell(0, 5, f"Email: {email}", ln=True)
 
-            pdf.cell(0, 5, f"CNPJ: {formatar_cpf(cnpj)}", ln=True)
+            # Formatar CNPJ com máscara ##.###.###/####-##
+            cnpj_formatado = formatar_cnpj(cnpj) if cnpj else "Não informado"
+            pdf.cell(0, 5, f"CNPJ: {cnpj_formatado}", ln=True)
 
             pdf.set_text_color(0, 0, 0)
             pdf.cell(0, 5, f"Doações: {qtd_doacoes}", ln=True)
@@ -471,11 +506,15 @@ def relatorio_ongs():
         footer(pdf)
 
         pdf_path = "relatorio_ongs.pdf"
-        pdf.output(pdf_path)
+        caminho = os.path.join(app.config['UPLOAD_FOLDER'], 'Relatorios')
+        os.makedirs(caminho, exist_ok=True)
+        caminho_pdf = os.path.join(caminho, pdf_path)
+        pdf.output(caminho_pdf)
 
-        return send_file(pdf_path, as_attachment=True)
+        return send_file(caminho_pdf, as_attachment=True)
 
     except Exception as e:
+        print(f"ERRO relatorio_ongs: {e}")
         con.rollback()
         return jsonify({'error': str(e)}), 500
 

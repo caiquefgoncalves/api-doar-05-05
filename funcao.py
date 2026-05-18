@@ -437,3 +437,13 @@ def ranking_lista(pdf, titulo, dados, tipo="moeda"):
         pdf.ln(2)
 
     pdf.ln(5)
+
+def formatar_cnpj(cnpj):
+
+    if not cnpj:
+        return ""
+
+    cnpj = ''.join(filter(str.isdigit, str(cnpj)))
+    if len(cnpj) == 14:
+        return f"{cnpj[:2]}.{cnpj[2:5]}.{cnpj[5:8]}/{cnpj[8:12]}-{cnpj[12:14]}"
+    return cnpj

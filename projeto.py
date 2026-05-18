@@ -418,6 +418,7 @@ def doar_projeto(id_projeto):
 
         nome_qr = resultado[0]
 
+
         return jsonify({
             'message': f'O QR code foi gerado com sucesso!',
             'pix': nome_qr
