@@ -9,32 +9,6 @@ from fpdf import FPDF
 import os
 
 
-# ============================================
-# ESTILO BASE PARA GRÁFICOS
-# ============================================
-estilo_padrao = Style(
-    background='white',
-    plot_background='white',
-    foreground='#333333',
-    foreground_strong='#333333',
-    foreground_subtle='#999999',
-    colors=('#f7b567', '#167cbf', '#f65682', '#4CAF50', '#9C27B0', '#FF9800', '#00BCD4', '#795548', '#607D8B', '#E91E63', '#3F51B5', '#8BC34A'),
-    font_family='Arial, sans-serif',
-    label_font_size=11,
-    major_label_font_size=13,
-    value_font_size=11,
-    title_font_size=16,
-    tooltip_font_size=11,
-    legend_font_size=11,
-    opacity='.85',
-    opacity_hover='1',
-    transition='200ms ease-in'
-)
-
-
-# ============================================
-# ROTAS DE DADOS (JSON)
-# ============================================
 
 @app.route('/minhas_doacoes', methods=['GET'])
 def minhas_doacoes():
@@ -246,170 +220,7 @@ def arrecadacao_global():
         con.close()
 
 
-# ============================================
-# GRÁFICOS SVG (PYGAL)
-# ============================================
 
-@app.route('/frequencia_doacoes_svg', methods=['GET'])
-def frequencia_doacoes_svg():
-    """Gráfico SVG - Frequência de doações do doador"""
-    token_data = decodificar_token()
-    if token_data == False:
-        return jsonify({'error': 'Token necessário'}), 401
-    if token_data['tipo'] != 1:
-        return jsonify({'error': 'Apenas doadores podem acessar'}), 403
-
-    id_doador = token_data['id_usuarios']
-
-    con = conexao()
-    cur = con.cursor()
-
-    try:
-        cur.execute("""
-            SELECT 
-                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
-                COUNT(*) as QTD
-            FROM DOACOES d
-            WHERE d.ID_USUARIOS = ?
-            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
-            ORDER BY MES
-        """, (id_doador,))
-        doacoes_mes = cur.fetchall()
-
-        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-        dados_meses = {mes: 0 for mes in meses}
-
-        for d in doacoes_mes:
-            if d[0] and 1 <= int(d[0]) <= 12:
-                dados_meses[meses[int(d[0]) - 1]] = int(d[1])
-
-        chart = pygal.Bar(
-            style=estilo_padrao,
-            height=350,
-            show_legend=False,
-            x_label_rotation=0,
-            rounded_bars=4
-        )
-        chart.title = 'Frequência de Doações'
-        chart.x_labels = meses
-        chart.add('Doações', [dados_meses[mes] for mes in meses])
-
-        return Response(chart.render(), mimetype='image/svg+xml')
-
-    except Exception as e:
-        print(f"ERRO: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        cur.close()
-        con.close()
-
-
-@app.route('/arrecadacao_mensal_ong_svg', methods=['GET'])
-def arrecadacao_mensal_ong_svg():
-    """Gráfico SVG - Arrecadação mensal da ONG"""
-    token_data = decodificar_token()
-    if token_data == False:
-        return jsonify({'error': 'Token necessário'}), 401
-    if token_data['tipo'] != 2:
-        return jsonify({'error': 'Apenas ONGs podem acessar'}), 403
-
-    id_ong = token_data['id_usuarios']
-
-    con = conexao()
-    cur = con.cursor()
-
-    try:
-        cur.execute("""
-            SELECT 
-                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
-                SUM(d.VALOR) as TOTAL
-            FROM DOACOES d
-            INNER JOIN PROJETOS p ON d.ID_PROJETOS = p.ID_PROJETOS
-            WHERE p.ID_USUARIOS = ?
-            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
-            ORDER BY MES
-        """, (id_ong,))
-        doacoes_mes = cur.fetchall()
-
-        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-        dados_meses = {mes: 0 for mes in meses}
-
-        for d in doacoes_mes:
-            if d[0] and 1 <= int(d[0]) <= 12:
-                dados_meses[meses[int(d[0]) - 1]] = float(d[1])
-
-        chart = pygal.Bar(
-            style=estilo_padrao,
-            height=350,
-            show_legend=False,
-            x_label_rotation=0,
-            rounded_bars=4,
-            value_formatter=lambda x: f'R$ {x:,.2f}' if x > 0 else ''
-        )
-        chart.title = 'Arrecadação Mensal'
-        chart.x_labels = meses
-        chart.add('R$', [dados_meses[mes] for mes in meses])
-
-        return Response(chart.render(), mimetype='image/svg+xml')
-
-    except Exception as e:
-        print(f"ERRO: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        cur.close()
-        con.close()
-
-
-@app.route('/admin/arrecadacao_global_svg', methods=['GET'])
-def arrecadacao_global_svg():
-    """Gráfico SVG - Arrecadação global (todas as ONGs)"""
-    token_data = decodificar_token()
-    if token_data == False:
-        return jsonify({'error': 'Token necessário'}), 401
-    if token_data['tipo'] != 0:
-        return jsonify({'error': 'Apenas administradores podem acessar'}), 403
-
-    con = conexao()
-    cur = con.cursor()
-
-    try:
-        cur.execute("""
-            SELECT 
-                EXTRACT(MONTH FROM d.DATA_DOACAO) as MES,
-                SUM(d.VALOR) as TOTAL
-            FROM DOACOES d
-            GROUP BY EXTRACT(MONTH FROM d.DATA_DOACAO)
-            ORDER BY MES
-        """)
-        doacoes_mes = cur.fetchall()
-
-        meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-        dados_meses = {mes: 0 for mes in meses}
-
-        for d in doacoes_mes:
-            if d[0] and 1 <= int(d[0]) <= 12:
-                dados_meses[meses[int(d[0]) - 1]] = float(d[1])
-
-        chart = pygal.Bar(
-            style=estilo_padrao,
-            height=350,
-            show_legend=False,
-            x_label_rotation=0,
-            rounded_bars=4,
-            value_formatter=lambda x: f'R$ {x:,.2f}' if x > 0 else ''
-        )
-        chart.title = 'Arrecadação Global'
-        chart.x_labels = meses
-        chart.add('R$', [dados_meses[mes] for mes in meses])
-
-        return Response(chart.render(), mimetype='image/svg+xml')
-
-    except Exception as e:
-        print(f"ERRO: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        cur.close()
-        con.close()
 
 @app.route('/admin/relatorio_doadores', methods=['GET'])
 def relatorio_doadores():
@@ -710,7 +521,7 @@ def relatorio_doacoes_periodo():
             INNER JOIN USUARIOS u_ong ON p.ID_USUARIOS = u_ong.ID_USUARIOS
             INNER JOIN USUARIOS u_doador ON d.ID_USUARIOS = u_doador.ID_USUARIOS
             WHERE d.DATA_DOACAO BETWEEN ? AND ?
-            ORDER BY d.DATA_DOACAO DESC
+            ORDER BY d.DATA_DOACAO ASC
         """, (data_inicio_formatada, data_fim_formatada))
         doacoes = cur.fetchall()
 
