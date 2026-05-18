@@ -25,34 +25,19 @@ def feed_atualizacoes():
     try:
         ordem = 'ASC' if filtro == 'antigos' else 'DESC'
 
-        inicio = atualizacoes_puladas + 1
-        fim = atualizacoes_puladas + limite
-
+        # Buscar atualizações
         cur.execute(f"""
-        SELECT a.ID_ATUALIZACOES, a.ID_PROJETOS, a.TITULO,
-        a.TEXTO, a.DATA_CRIACAO, p.ID_USUARIOS, p.TITULO AS TITULO_PROJETO,
-        u.NOME, COALESCE(c.QTD_CURTIDAS, 0) AS QTD_CURTIDAS,
-        COALESCE(co.QTD_COMENTARIOS, 0) AS QTD_COMENTARIOS
-        FROM ATUALIZACOES a
-        INNER JOIN PROJETOS p ON p.ID_PROJETOS = a.ID_PROJETOS
-        INNER JOIN USUARIOS u ON u.ID_USUARIOS = p.ID_USUARIOS
-        LEFT JOIN (
-        SELECT
-        ID_ATUALIZACOES,
-        COUNT(*) AS QTD_CURTIDAS
-        FROM CURTIDAS c
-        GROUP BY ID_ATUALIZACOES
-        ) c ON c.ID_ATUALIZACOES = a.ID_ATUALIZACOES
-        LEFT JOIN (
-        SELECT
-        ID_ATUALIZACOES,
-        COUNT(*) AS QTD_COMENTARIOS
-        FROM COMENTARIOS co
-        GROUP BY ID_ATUALIZACOES
-        ) co ON co.ID_ATUALIZACOES = a.ID_ATUALIZACOES
-        WHERE u.APROVACAO = 1 AND u.ATIVO = 1
-        ORDER BY a.DATA_CRIACAO {ordem}
-        ROWS {inicio} TO {fim}
+            SELECT FIRST {limite} SKIP {atualizacoes_puladas}
+            a.ID_ATUALIZACOES, a.ID_PROJETOS, a.TITULO,
+            a.TEXTO, a.DATA_CRIACAO, p.ID_USUARIOS, p.TITULO AS TITULO_PROJETO,
+            u.NOME,
+            (SELECT COUNT(*) FROM CURTIDAS c WHERE c.ID_ATUALIZACOES = a.ID_ATUALIZACOES) AS QTD_CURTIDAS,
+            (SELECT COUNT(*) FROM COMENTARIOS co WHERE co.ID_ATUALIZACOES = a.ID_ATUALIZACOES) AS QTD_COMENTARIOS
+            FROM ATUALIZACOES a
+            INNER JOIN PROJETOS p ON p.ID_PROJETOS = a.ID_PROJETOS
+            INNER JOIN USUARIOS u ON u.ID_USUARIOS = p.ID_USUARIOS
+            WHERE u.APROVACAO = 1 AND u.ATIVO = 1
+            ORDER BY a.DATA_CRIACAO {ordem}
         """)
 
         dados = cur.fetchall()
@@ -77,39 +62,37 @@ def feed_atualizacoes():
                     'ong_nome': str(a[7]) if a[7] else 'ONG',
                     'ong_foto': f'{a[5]}.jpeg',
                     'foto': f'{a[0]}.jpeg',
-                    'qtd_curtidas': a[8],
-                    'qtd_comentarios': a[9]
-                    })
-
-        cur.execute("""SELECT ID_USUARIOS FROM USUARIOS
-        WHERE TIPO = 2 AND APROVACAO = 1 AND ATIVO = 1""")
-        ids_ongs = cur.fetchall()
-
-        if not ids_ongs:
-            ongs = 'Não há nenhuma ONG cadastrada'
-        else:
-            ids_sorteado = random.sample(ids_ongs, 3)
-            ids_sorteado_formatado = []
-            for id in ids_sorteado:
-                ids_sorteado_formatado.append(id[0])
-
-            ongs = []
-            for id in ids_sorteado_formatado:
-                cur.execute("""SELECT ID_USUARIOS, NOME
-                FROM USUARIOS WHERE ID_USUARIOS = ?""", (id, ))
-                ong = cur.fetchone()
-                ongs.append({
-                    "id": ong[0],
-                    "nome": ong[1],
-                    "foto": f'{ong[0]}.jpeg'
+                    'qtd_curtidas': a[8] if a[8] else 0,
+                    'qtd_comentarios': a[9] if a[9] else 0
                 })
 
-            return jsonify({'atualizacoes': lista, 'ongs': ongs}), 200
+        # Buscar ONGs aleatórias
+        cur.execute("""
+            SELECT FIRST 3 ID_USUARIOS, NOME
+            FROM USUARIOS
+            WHERE TIPO = 2 AND APROVACAO = 1 AND ATIVO = 1
+            ORDER BY RAND()
+        """)
+        ongs_aleatorias = cur.fetchall()
 
-        return jsonify({'atualizacoes': lista}), 200
+        ongs = []
+        for ong in ongs_aleatorias:
+            ongs.append({
+                "id": ong[0],
+                "nome": ong[1],
+                "foto": f'{ong[0]}.jpeg'
+            })
+
+        return jsonify({
+            'atualizacoes': lista,
+            'ongs': ongs,
+            'total_atualizacoes': len(lista)
+        }), 200
 
     except Exception as e:
         print(f"ERRO feed_atualizacoes: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
     finally:
         cur.close()
@@ -667,6 +650,38 @@ def verificar_curtida(id_atualizacoes):
     except Exception as e:
         print(f"ERRO ao verificar seguindo: {str(e)}")  # Debug
         return jsonify({'error': f'Erro ao verificar: {str(e)}'}), 500
+    finally:
+        cur.close()
+        con.close()
+
+@app.route('/ongs_recomendacoes', methods=['GET'])
+def ongs_recomendacoes():
+    con = conexao()
+    cur = con.cursor()
+
+    try:
+        # Buscar 3 ONGs aleatórias, aprovadas e ativas
+        cur.execute("""
+            SELECT FIRST 3 ID_USUARIOS, NOME
+            FROM USUARIOS
+            WHERE TIPO = 2 AND APROVACAO = 1 AND ATIVO = 1
+            ORDER BY RAND()
+        """)
+        ongs_aleatorias = cur.fetchall()
+
+        ongs = []
+        for ong in ongs_aleatorias:
+            ongs.append({
+                "id": ong[0],
+                "nome": ong[1],
+                "foto": f'{ong[0]}.jpeg'
+            })
+
+        return jsonify({'ongs': ongs}), 200
+
+    except Exception as e:
+        print(f"ERRO ongs_recomendacoes: {e}")
+        return jsonify({'error': str(e)}), 500
     finally:
         cur.close()
         con.close()

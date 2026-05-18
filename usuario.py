@@ -937,3 +937,4 @@ def bloquear(id_usuarios):
     finally:
         cur.close()
         con.close()
+
