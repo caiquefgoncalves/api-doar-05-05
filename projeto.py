@@ -310,7 +310,7 @@ def ver_projeto_publico(id_projetos):
                 'cpf_cnpj': cnpj_formatado, 'cod_banco': ong[4], 'num_agencia': ong[5],
                 'localizacao': ong[6],
                 'pix': nome_qr,
-                'chave-pix': chave_pix
+                'chave_pix': chave_pix
             } if ong else None,
             'qtd_atualizacoes': len(atualizacoes_lista),
             'atualizacoes': atualizacoes_lista
