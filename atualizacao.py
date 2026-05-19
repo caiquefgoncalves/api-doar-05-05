@@ -654,19 +654,50 @@ def verificar_curtida(id_atualizacoes):
         cur.close()
         con.close()
 
+
 @app.route('/ongs_recomendacoes', methods=['GET'])
 def ongs_recomendacoes():
     con = conexao()
     cur = con.cursor()
 
     try:
-        # Buscar 3 ONGs aleatórias, aprovadas e ativas
-        cur.execute("""
-            SELECT FIRST 3 ID_USUARIOS, NOME
-            FROM USUARIOS
-            WHERE TIPO = 2 AND APROVACAO = 1 AND ATIVO = 1
-            ORDER BY RAND()
-        """)
+        # 💡 TRUQUE INTELIGENTE:
+        # Se o front-end enviou o token puro no Authorization (sem Bearer),
+        # nós interceptamos e ajustamos aqui dentro da rota, antes de chamar a sua função.
+        auth_header = request.headers.get('Authorization')
+        if auth_header and not auth_header.startswith('Bearer '):
+            # Injeta o 'Bearer ' temporariamente na requisição para o seu decodificar_token() aceitar!
+            request.environ['HTTP_AUTHORIZATION'] = f"Bearer {auth_header.strip()}"
+
+        # 1. Agora o seu decodificar_token() vai funcionar perfeitamente!
+        token_data = decodificar_token()
+
+        # Se o usuário estiver logado e for um Doador (tipo = 1)
+        if token_data and token_data != False and isinstance(token_data, dict) and token_data.get('tipo') == 1:
+            id_usuario = token_data['id_usuarios']
+
+            # 2. Busca 3 ONGs aleatórias onde NÃO exista registro na sua tabela SEGUINDO para este doador
+            cur.execute("""
+                SELECT FIRST 3 u.ID_USUARIOS, u.NOME
+                FROM USUARIOS u
+                WHERE u.TIPO = 2 AND u.APROVACAO = 1 AND u.ATIVO = 1
+                AND NOT EXISTS (
+                    SELECT 1 FROM SEGUINDO s 
+                    WHERE s.ID_USUARIOS_ONG = u.ID_USUARIOS 
+                    AND s.ID_USUARIOS_DOADOR = ?
+                )
+                ORDER BY RAND()
+            """, (id_usuario,))
+
+        else:
+            # Se não estiver logado ou não for doador, busca 3 ONGs aleatórias gerais
+            cur.execute("""
+                SELECT FIRST 3 ID_USUARIOS, NOME
+                FROM USUARIOS
+                WHERE TIPO = 2 AND APROVACAO = 1 AND ATIVO = 1
+                ORDER BY RAND()
+            """)
+
         ongs_aleatorias = cur.fetchall()
 
         ongs = []
