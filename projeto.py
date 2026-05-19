@@ -261,6 +261,7 @@ def ver_projeto_publico(id_projetos):
 
         # Gerar QR Code PIX (apenas se a ONG tiver chave PIX)
         nome_qr = None
+        chave_pix = None
         if ong and ong[7]:
             try:
                 resultado = gerar_qr_pix(
@@ -271,6 +272,7 @@ def ver_projeto_publico(id_projetos):
                     pasta_base=app.config['UPLOAD_FOLDER']
                 )
                 nome_qr = resultado[0]
+                chave_pix = resultado[1]
             except Exception as e:
                 print(f"Erro ao gerar QR Code: {e}")
 
@@ -307,7 +309,8 @@ def ver_projeto_publico(id_projetos):
                 'id': ong[0], 'nome': ong[1], 'descricao_breve': ong[2],
                 'cpf_cnpj': cnpj_formatado, 'cod_banco': ong[4], 'num_agencia': ong[5],
                 'localizacao': ong[6],
-                'pix': nome_qr
+                'pix': nome_qr,
+                'chave-pix': chave_pix
             } if ong else None,
             'qtd_atualizacoes': len(atualizacoes_lista),
             'atualizacoes': atualizacoes_lista
@@ -418,11 +421,13 @@ def doar_projeto(id_projeto):
         )
 
         nome_qr = resultado[0]
+        chave_pix = resultado[1]
 
 
         return jsonify({
             'message': f'O QR code foi gerado com sucesso!',
-            'pix': nome_qr
+            'pix': nome_qr,
+            'chave_pix': chave_pix
         }), 200
 
     except Exception as e:

@@ -73,6 +73,7 @@ def ver_ong_publica(id_ong):
 
         # Gerar QR Code PIX
         nome_qr = None
+        chave_pix = None
         if ong[9]:  # CHAVE_PIX está na posição 9
             try:
                 resultado = gerar_qr_pix(
@@ -83,6 +84,7 @@ def ver_ong_publica(id_ong):
                     pasta_base=app.config['UPLOAD_FOLDER']
                 )
                 nome_qr = resultado[0]
+                chave_pix = resultado[1]
             except Exception as e:
                 print(f"Erro ao gerar QR Code: {e}")
 
@@ -125,6 +127,7 @@ def ver_ong_publica(id_ong):
                 'localizacao': ong[6], 'cod_banco': ong[7], 'num_agencia': ong[8],
                 'foto': f'{ong[0]}.jpeg',
                 'pix': nome_qr,
+                'chave_pix': chave_pix,
                 'qtd_seguidores': qtd_seguidores
             },
             'qtd_projetos': qtd_projetos,
