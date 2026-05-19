@@ -92,9 +92,14 @@ def ver_ong_publica(id_ong):
 
         if projetos:
             qtd_projetos = len(projetos)
-            projetos_lista = [{
-                'id': p[0], 'titulo': p[1], 'descricao': p[2], 'tipo_ajuda': p[3]
-            } for p in projetos]
+            projetos_lista = []
+            for p in projetos:
+                if p[3] == "Dinheiro":
+                    tipo_ajuda = 0
+                else:
+                    tipo_ajuda = 1
+                projetos_lista.append({
+                'id': p[0], 'titulo': p[1], 'descricao': p[2], 'tipo_ajuda': p[3], 'tipo_ajuda_numero': tipo_ajuda})
 
             ids_projetos = [p[0] for p in projetos]
 

@@ -94,6 +94,7 @@ def listar_projetos_ong():
 
         lista_projetos = []
         for p in projetos:
+
             lista_projetos.append({
                 'id': p[0],
                 'id_usuarios': p[1],
